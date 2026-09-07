@@ -39,6 +39,7 @@ from .prompts import (
     render_step_focus,
     render_wizard_context,
 )
+from .thinking import ThinkingSplitter
 
 MAX_HISTORY_MESSAGES = 24
 PROPOSE_TOOL_NAME = "propose_wizard_actions"
@@ -188,13 +189,21 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
         for _round in range(max(1, settings.llm_max_tool_rounds)):
             round_text: list[str] = []
             calls: list[ToolCall] = []
+            splitter = ThinkingSplitter()
+            yield AgentEvent.status("Thinking…")
 
             async for event in client.stream(messages, tools):
                 if event.type == "token":
-                    round_text.append(event.text)
-                    yield AgentEvent.token(event.text)
+                    visible = splitter.feed(event.text)
+                    if visible:
+                        round_text.append(visible)
+                        yield AgentEvent.token(visible)
                 elif event.type == "tool_calls":
                     calls = event.tool_calls
+            trailing = splitter.flush()
+            if trailing:
+                round_text.append(trailing)
+                yield AgentEvent.token(trailing)
 
             text = "".join(round_text)
             if text.strip():
@@ -320,12 +329,20 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
             )
             closing_text: list[str] = []
             closing_calls: list[ToolCall] = []
+            closing_splitter = ThinkingSplitter()
+            yield AgentEvent.status("Thinking…")
             async for event in client.stream(messages, tools=[PROPOSE_ACTIONS_TOOL]):
                 if event.type == "token":
-                    closing_text.append(event.text)
-                    yield AgentEvent.token(event.text)
+                    visible = closing_splitter.feed(event.text)
+                    if visible:
+                        closing_text.append(visible)
+                        yield AgentEvent.token(visible)
                 elif event.type == "tool_calls":
                     closing_calls = event.tool_calls
+            trailing = closing_splitter.flush()
+            if trailing:
+                closing_text.append(trailing)
+                yield AgentEvent.token(trailing)
             if closing_text:
                 answer_parts.append("".join(closing_text))
 
