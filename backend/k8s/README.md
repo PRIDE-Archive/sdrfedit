@@ -4,7 +4,7 @@ Modeled on `pmultiqc`'s deployment: GitHub Actions builds and pushes the
 image to GHCR; Kubernetes deployment is manual, via `deploy.sh` against
 whatever cluster your current `kubectl` context points at.
 
-Image: `ghcr.io/bigbio/sdrfedit-backend:latest` (also tagged with the commit
+Image: `ghcr.io/pride-archive/sdrfedit-backend:latest` (also tagged with the commit
 SHA). Public repo -> public GHCR package by default, so no `imagePullSecrets`
 needed unless the package is made private (see `deployment.yaml` for where to
 add one if so).

@@ -16,7 +16,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: bigbio/sdrfedit-frontend
 
 jobs:
   build-and-push:
@@ -42,11 +41,17 @@ jobs:
       - name: Determine tags
         id: tags
         run: |
-          TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          # Dynamic (not hardcoded to an org) so a repo transfer doesn't
+          # silently break pushes -- GITHUB_TOKEN's package-write scope
+          # follows the repo's CURRENT owner. Lowercased: GHCR/Docker image
+          # names must be lowercase, but github.repository isn't (this org
+          # is "PRIDE-Archive"), and Actions expressions have no toLower().
+          IMAGE_NAME="$(echo '${{ github.repository }}-frontend' | tr '[:upper:]' '[:lower:]')"
+          TAGS="${{ env.REGISTRY }}/$IMAGE_NAME:${{ github.sha }}"
           if [ "${{ github.ref_name }}" = "main" ]; then
-            TAGS="$TAGS,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+            TAGS="$TAGS,${{ env.REGISTRY }}/$IMAGE_NAME:latest"
           elif [ "${{ github.ref_name }}" = "pride-deploy" ]; then
-            TAGS="$TAGS,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:pride"
+            TAGS="$TAGS,${{ env.REGISTRY }}/$IMAGE_NAME:pride"
           fi
           echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
 

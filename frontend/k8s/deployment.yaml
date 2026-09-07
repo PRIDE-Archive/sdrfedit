@@ -22,7 +22,7 @@ spec:
       labels:
         app: sdrf-editor
     spec:
-      # ghcr.io/bigbio/sdrfedit-frontend is public (public repo), so no
+      # ghcr.io/pride-archive/sdrfedit-frontend is public (public repo), so no
       # imagePullSecrets needed -- add one here if the package is made private.
       imagePullSecrets: []
       securityContext:
@@ -36,7 +36,7 @@ spec:
           # Once verified, pin to the exact commit-SHA tag instead -- see
           # backend/k8s/README.md for why :latest/:pride are not safe to
           # leave a production deployment tracking long-term.
-          image: ghcr.io/bigbio/sdrfedit-frontend:pride
+          image: ghcr.io/pride-archive/sdrfedit-frontend:pride
           imagePullPolicy: Always
           ports:
             - name: http
