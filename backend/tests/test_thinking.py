@@ -46,3 +46,23 @@ def test_text_after_close_tag_streams_immediately_not_just_at_flush():
 def test_single_chunk_containing_the_whole_thing():
     result = feed_all(ThinkingSplitter(), ["reasoning</think>Final answer."])
     assert result == "Final answer."
+
+
+def test_saw_close_tag_distinguishes_direct_answer_from_cutoff_mid_thought():
+    """A caller needs to tell "model answered directly" (safe to show as-is)
+    apart from "model was still thinking when the round ended, e.g. cut off
+    by a token cap" (flush() text is raw reasoning, not an answer)."""
+    direct = ThinkingSplitter()
+    direct.feed("Just answering directly, no think block.")
+    direct.flush()
+    assert direct.saw_close_tag is False
+
+    cut_off = ThinkingSplitter()
+    cut_off.feed("Still reasoning when the stream ended abruptly")
+    cut_off.flush()
+    assert cut_off.saw_close_tag is False
+
+    closed = ThinkingSplitter()
+    closed.feed("reasoning</think>answer")
+    closed.flush()
+    assert closed.saw_close_tag is True

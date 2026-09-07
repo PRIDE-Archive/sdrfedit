@@ -44,6 +44,29 @@ from .thinking import ThinkingSplitter
 MAX_HISTORY_MESSAGES = 24
 PROPOSE_TOOL_NAME = "propose_wizard_actions"
 
+# A round can end with a ThinkingSplitter that never saw </think> for two very
+# different reasons: the model answered directly (short, legitimate), or it
+# was still mid-thought when cut off by the token cap (observed in testing --
+# the model can spiral into repetitive reasoning for thousands of tokens
+# before ever closing the block). Length is the only signal available to
+# tell them apart; a genuine direct answer is nowhere near this long.
+MAX_UNCLOSED_THINKING_CHARS = 800
+CUTOFF_FALLBACK_MESSAGE = (
+    "Sorry, that took too long to think through and got cut off. Could you try again?"
+)
+
+
+def _resolve_round_text(text: str, saw_close_tag: bool) -> str:
+    """Guard against dumping a runaway, unclosed <think> block on the user.
+
+    Only applies when </think> was never seen this round -- text that
+    already streamed after a genuine close tag is never touched here,
+    however long it legitimately is.
+    """
+    if not saw_close_tag and len(text) > MAX_UNCLOSED_THINKING_CHARS:
+        return CUTOFF_FALLBACK_MESSAGE
+    return text
+
 # The panel lets the user expand a tool result; beyond this it is unreadable
 # anyway and only costs bandwidth.
 MAX_UI_RESULT_CHARS = 8000
@@ -200,7 +223,7 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
                         yield AgentEvent.token(visible)
                 elif event.type == "tool_calls":
                     calls = event.tool_calls
-            trailing = splitter.flush()
+            trailing = _resolve_round_text(splitter.flush(), splitter.saw_close_tag)
             if trailing:
                 round_text.append(trailing)
                 yield AgentEvent.token(trailing)
@@ -339,7 +362,7 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
                         yield AgentEvent.token(visible)
                 elif event.type == "tool_calls":
                     closing_calls = event.tool_calls
-            trailing = closing_splitter.flush()
+            trailing = _resolve_round_text(closing_splitter.flush(), closing_splitter.saw_close_tag)
             if trailing:
                 closing_text.append(trailing)
                 yield AgentEvent.token(trailing)

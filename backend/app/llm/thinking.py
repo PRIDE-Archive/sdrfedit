@@ -23,6 +23,19 @@ class ThinkingSplitter:
     def __init__(self) -> None:
         self._buffer = ""
         self._in_thinking = True
+        self._saw_close_tag = False
+
+    @property
+    def saw_close_tag(self) -> bool:
+        """True once </think> has actually been seen this round.
+
+        Lets a caller distinguish "the model answered directly, no thinking"
+        (flush() text is a legitimate short answer) from "the model was still
+        mid-thought when the round ended, e.g. cut off by a token cap"
+        (flush() text is a runaway, possibly huge chunk of raw reasoning that
+        should not be dumped on the user as-is -- see agent.py).
+        """
+        return self._saw_close_tag
 
     def feed(self, text: str) -> str:
         """Feed the next content fragment.
@@ -44,6 +57,7 @@ class ThinkingSplitter:
 
         self._buffer = self._buffer[idx + len(CLOSE_TAG) :]
         self._in_thinking = False
+        self._saw_close_tag = True
         visible, self._buffer = self._buffer, ""
         return visible
 
