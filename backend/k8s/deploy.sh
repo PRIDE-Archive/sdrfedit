@@ -1,8 +1,16 @@
 #!/bin/bash
 # SDRF Wizard AI Assistant backend -- manual Kubernetes deployment (hh-11).
-# Image is built and pushed by GitHub Actions to GHCR
-# (.github/workflows/backend-build-and-push.yml); this script only applies
-# manifests to whatever cluster your current kubectl context points at.
+# The GitLab CI pipeline (../../.gitlab-ci.yml, deploy_backend_hh11) does
+# this automatically on pride-deploy; this script is the fallback for an
+# ad-hoc deploy from a laptop. kubernetes.yml is a template -- BACKEND_IMAGE,
+# DOCKER_PULL_SECRET and LLM_BASE_URL must be set (envsubst substitutes
+# them; LLM_BASE_URL is an internal hh-44 hostname, see
+# DEPLOYMENT_SECRETS.local.md, never committed). EMBEDDING_BASE_URL is the
+# same kind of value but optional -- leave it unset while embeddings aren't
+# wired to a real provider. DOCKER_PULL_SECRET must already exist in the
+# namespace
+# (kubectl -n sdrf-assistant create secret docker-registry $DOCKER_PULL_SECRET
+#  --docker-server=<registry> --docker-username=... --docker-password=...).
 
 set -e
 
@@ -29,14 +37,23 @@ check_secret_file() {
     fi
 }
 
+check_deploy_vars() {
+    if [ -z "${BACKEND_IMAGE:-}" ] || [ -z "${DOCKER_PULL_SECRET:-}" ] || [ -z "${LLM_BASE_URL:-}" ]; then
+        echo -e "${RED}Error: BACKEND_IMAGE, DOCKER_PULL_SECRET and LLM_BASE_URL must be set${NC}"
+        echo 'e.g. export BACKEND_IMAGE=registry.example/sdrfedit/backend:<tag> DOCKER_PULL_SECRET=sdrfedit-gitlab-docker-secret LLM_BASE_URL=<internal pride-llm-api URL, see DEPLOYMENT_SECRETS.local.md>'
+        exit 1
+    fi
+    if ! command -v envsubst &> /dev/null; then
+        echo -e "${RED}Error: envsubst is not installed (gettext package)${NC}"
+        exit 1
+    fi
+}
+
 deploy() {
     echo -e "${GREEN}Deploying SDRF Wizard AI Assistant backend to $(kubectl config current-context)...${NC}"
-    kubectl apply -f "$SCRIPT_DIR/namespace.yaml"
-    kubectl apply -f "$SCRIPT_DIR/configmap.yaml"
-    kubectl apply -f "$SCRIPT_DIR/secret.yaml"
-    kubectl apply -f "$SCRIPT_DIR/deployment.yaml"
-    kubectl apply -f "$SCRIPT_DIR/service.yaml"
-    kubectl apply -f "$SCRIPT_DIR/ingress-pride-services.yaml"
+    kubectl create namespace "$NAMESPACE" || true
+    kubectl -n "$NAMESPACE" apply -f "$SCRIPT_DIR/secret.yaml"
+    envsubst '$BACKEND_IMAGE $DOCKER_PULL_SECRET $LLM_BASE_URL $EMBEDDING_BASE_URL' < "$SCRIPT_DIR/kubernetes.yml" | kubectl -n "$NAMESPACE" apply -f -
     echo -e "${GREEN}Deployment applied${NC}"
 }
 
@@ -60,23 +77,20 @@ rollout() {
 
 delete() {
     echo -e "${YELLOW}Deleting sdrf-assistant...${NC}"
-    kubectl delete -f "$SCRIPT_DIR/ingress-pride-services.yaml" --ignore-not-found
-    kubectl delete -f "$SCRIPT_DIR/service.yaml" --ignore-not-found
-    kubectl delete -f "$SCRIPT_DIR/deployment.yaml" --ignore-not-found
-    kubectl delete -f "$SCRIPT_DIR/secret.yaml" --ignore-not-found
-    kubectl delete -f "$SCRIPT_DIR/configmap.yaml" --ignore-not-found
-    echo -e "${GREEN}Deletion completed (namespace left in place; delete it yourself if you want it gone too)${NC}"
+    envsubst '$BACKEND_IMAGE $DOCKER_PULL_SECRET $LLM_BASE_URL $EMBEDDING_BASE_URL' < "$SCRIPT_DIR/kubernetes.yml" | kubectl -n "$NAMESPACE" delete -f - --ignore-not-found
+    kubectl -n "$NAMESPACE" delete -f "$SCRIPT_DIR/secret.yaml" --ignore-not-found
+    echo -e "${GREEN}Deletion completed (namespace and ingress left in place; delete them yourself if you want them gone too)${NC}"
 }
 
 usage() {
     echo "Usage: $0 [COMMAND]"
     echo ""
     echo "Commands:"
-    echo "  deploy    Apply namespace, configmap, secret, deployment, service, ingress"
+    echo "  deploy    Apply secret, configmap/deployment/service (kubernetes.yml)"
     echo "  status    Check deployment status"
     echo "  logs      Follow application logs"
     echo "  rollout   Restart the deployment to pick up a new image (after CI pushes)"
-    echo "  delete    Delete deployment, service, ingress, configmap, secret (keeps namespace)"
+    echo "  delete    Delete deployment/service/configmap and secret (keeps namespace and ingress)"
     echo "  help      Show this help message"
 }
 
@@ -84,6 +98,7 @@ case "${1:-help}" in
     deploy)
         check_kubectl
         check_secret_file
+        check_deploy_vars
         deploy
         ;;
     status)
@@ -100,6 +115,7 @@ case "${1:-help}" in
         ;;
     delete)
         check_kubectl
+        check_deploy_vars
         delete
         ;;
     help|*)

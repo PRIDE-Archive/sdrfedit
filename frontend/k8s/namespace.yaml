@@ -1,7 +1,0 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: sdrf-editor
-  labels:
-    name: sdrf-editor
-    app: sdrf-editor

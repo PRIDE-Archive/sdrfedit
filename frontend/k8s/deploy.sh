@@ -1,8 +1,12 @@
 #!/bin/bash
 # SDRF Editor frontend -- manual Kubernetes deployment (hh-11).
-# Image is built and pushed by GitHub Actions to GHCR
-# (.github/workflows/frontend-build-and-push.yml); this script only applies
-# manifests to whatever cluster your current kubectl context points at.
+# The GitLab CI pipeline (../../.gitlab-ci.yml, deploy_frontend_hh11) does
+# this automatically on pride-deploy; this script is the fallback for an
+# ad-hoc deploy from a laptop. kubernetes.yml is a template -- FRONTEND_IMAGE
+# and DOCKER_PULL_SECRET must be set (envsubst substitutes them), and
+# DOCKER_PULL_SECRET must already exist in the namespace
+# (kubectl -n sdrf-editor create secret docker-registry $DOCKER_PULL_SECRET
+#  --docker-server=<registry> --docker-username=... --docker-password=...).
 #
 # This is an ADDITIONAL deployment path alongside the existing GitHub Pages
 # and SSH-to-server deployments (see .github/workflows/deploy-pages.yml and
@@ -24,12 +28,22 @@ check_kubectl() {
     fi
 }
 
+check_deploy_vars() {
+    if [ -z "${FRONTEND_IMAGE:-}" ] || [ -z "${DOCKER_PULL_SECRET:-}" ]; then
+        echo -e "${RED}Error: FRONTEND_IMAGE and DOCKER_PULL_SECRET must be set${NC}"
+        echo 'e.g. export FRONTEND_IMAGE=registry.example/sdrfedit/frontend:<tag> DOCKER_PULL_SECRET=sdrfedit-gitlab-docker-secret'
+        exit 1
+    fi
+    if ! command -v envsubst &> /dev/null; then
+        echo -e "${RED}Error: envsubst is not installed (gettext package)${NC}"
+        exit 1
+    fi
+}
+
 deploy() {
     echo -e "${GREEN}Deploying SDRF Editor frontend to $(kubectl config current-context)...${NC}"
-    kubectl apply -f "$SCRIPT_DIR/namespace.yaml"
-    kubectl apply -f "$SCRIPT_DIR/deployment.yaml"
-    kubectl apply -f "$SCRIPT_DIR/service.yaml"
-    kubectl apply -f "$SCRIPT_DIR/ingress-pride-services.yaml"
+    kubectl create namespace "$NAMESPACE" || true
+    envsubst '$FRONTEND_IMAGE $DOCKER_PULL_SECRET' < "$SCRIPT_DIR/kubernetes.yml" | kubectl -n "$NAMESPACE" apply -f -
     echo -e "${GREEN}Deployment applied${NC}"
 }
 
@@ -55,7 +69,7 @@ usage() {
     echo "Usage: $0 [COMMAND]"
     echo ""
     echo "Commands:"
-    echo "  deploy    Apply namespace, deployment, service, ingress"
+    echo "  deploy    Apply deployment/service (kubernetes.yml)"
     echo "  status    Check deployment status"
     echo "  logs      Follow nginx logs"
     echo "  rollout   Restart the deployment to pick up a new image"
@@ -63,7 +77,7 @@ usage() {
 }
 
 case "${1:-help}" in
-    deploy)  check_kubectl; deploy ;;
+    deploy)  check_kubectl; check_deploy_vars; deploy ;;
     status)  check_kubectl; status ;;
     logs)    check_kubectl; logs ;;
     rollout) check_kubectl; rollout ;;
