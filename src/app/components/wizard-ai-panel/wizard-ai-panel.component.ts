@@ -268,9 +268,9 @@ const DEFAULT_WIDTH = 400;
                       <div class="file-meta">
                         <span class="file-name">{{ message.attachment.fileName }}</span>
                         @if (message.attachment.status === 'parsing') {
-                          <span class="file-status">正在上传并解析…</span>
+                          <span class="file-status">Uploading and parsing…</span>
                         } @else if (message.attachment.status === 'error') {
-                          <span class="file-status">{{ message.attachment.error || '解析失败' }}</span>
+                          <span class="file-status">{{ message.attachment.error || 'Parsing failed' }}</span>
                         } @else {
                           <span class="file-status">
                             {{ message.attachment.sizeLabel || 'PDF' }}
@@ -418,9 +418,9 @@ const DEFAULT_WIDTH = 400;
                   <div class="composer-file-meta">
                     <span class="composer-file-name">{{ file.fileName }}</span>
                     @if (file.status === 'parsing') {
-                      <span class="composer-file-status">正在上传并解析…</span>
+                      <span class="composer-file-status">Uploading and parsing…</span>
                     } @else if (file.status === 'error') {
-                      <span class="composer-file-status">{{ file.error || '解析失败' }}</span>
+                      <span class="composer-file-status">{{ file.error || 'Parsing failed' }}</span>
                     } @else {
                       <span class="composer-file-status">
                         {{ file.sizeLabel || 'PDF' }}
@@ -2081,11 +2081,11 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
     const preview = this.bridge.previewAction(card.action);
     const why = card.action.reasoning?.trim();
     const lines = [
-      `关于建议「${card.action.label}」：`,
-      `当前变更：${preview}`,
+      `Regarding the suggestion "${card.action.label}":`,
+      `Current change: ${preview}`,
     ];
-    if (why) lines.push(`AI 理由：${why}`);
-    lines.push('我的意见：');
+    if (why) lines.push(`AI reasoning: ${why}`);
+    lines.push('My feedback:');
     this.draft = lines.join('\n');
     this._collapsed.set(false);
     setTimeout(() => {
@@ -2151,7 +2151,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
         charCount: 0,
         sizeLabel,
         status: 'error',
-        error: detail || '上传或解析失败',
+        error: detail || 'Upload or parsing failed',
       });
     }
   }
