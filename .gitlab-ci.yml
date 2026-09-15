@@ -8,9 +8,9 @@
 # variables (KUBE_CONFIG, LLM_API_KEY, etc. -- see backend/k8s/README.md)
 # rather than a committed/locally-applied secret.yaml.
 #
-# Scoped to the pride-deploy branch only, matching the existing hh-11
-# testing setup (see .github/workflows/*-build-and-push.yml). Point at main
-# once this is promoted beyond hh-11 testing.
+# Build/deploy jobs run on pride-deploy and main (still manual -- see
+# `when: manual` below), matching the existing hh-11 testing setup (see
+# .github/workflows/*-build-and-push.yml).
 
 variables:
   DOCKER_PULL_SECRET: sdrfedit-gitlab-docker-secret
@@ -48,7 +48,7 @@ pytest:
     - docker login -u gitlab-ci-token -p $CI_JOB_TOKEN $CI_REGISTRY
     - docker push $IMAGE
   rules:
-    - if: '$CI_COMMIT_BRANCH == "pride-deploy"'
+    - if: '$CI_COMMIT_BRANCH == "pride-deploy" || $CI_COMMIT_BRANCH == "main"'
   when: manual
 
 docker_build_backend:
@@ -67,7 +67,7 @@ docker_build_frontend:
   stage: deploy
   image: dtzar/helm-kubectl
   rules:
-    - if: '$CI_COMMIT_BRANCH == "pride-deploy"'
+    - if: '$CI_COMMIT_BRANCH == "pride-deploy" || $CI_COMMIT_BRANCH == "main"'
   when: manual
   before_script:
     - apk add --update bash gettext tzdata coreutils
@@ -89,7 +89,7 @@ deploy_backend_hh11:
   environment: hh-11-sdrf-assistant
   script:
     # App secrets come from GitLab CI/CD variables (masked, protected on
-    # pride-deploy), not a locally-applied secret.yaml -- see
+    # pride-deploy and main), not a locally-applied secret.yaml -- see
     # backend/k8s/README.md.
     - kubectl -n sdrf-assistant delete secret sdrf-assistant-secrets || true
     - kubectl -n sdrf-assistant create secret generic sdrf-assistant-secrets --from-literal=LLM_API_KEY="$LLM_API_KEY" --from-literal=EMBEDDING_API_KEY="$EMBEDDING_API_KEY" --from-literal=MINERU_API_KEY="$MINERU_API_KEY"
