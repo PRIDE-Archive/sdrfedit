@@ -1,0 +1,166 @@
+# Combined manifest applied by GitLab CI (../../.gitlab-ci.yml, deploy_backend_hh11)
+# via `envsubst < kubernetes.yml | kubectl -n sdrf-assistant apply -f -`.
+# No metadata.namespace fields on purpose -- the namespace comes from the
+# `-n` flag at apply time, not the manifest, matching pride-archive-api's
+# .kubernetes.yml convention. For a manual deploy see deploy.sh.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sdrf-assistant-config
+data:
+  ROOT_PATH: "/pride/services/sdrf-assistant"
+  # Restrict to the actual SDRF Editor frontend origin(s) in production.
+  CORS_ORIGINS: "https://www.ebi.ac.uk"
+
+  # ---------- LLM: pride-llm-api gateway on the hh-44 cluster ----------
+  # LLM_BASE_URL and LLM_API_KEY are GitLab CI/CD variables, not set here --
+  # the base URL is an internal hh-44 worker hostname:port, not something to
+  # commit to a public repo. See ../../.gitlab-ci.yml and README.md. It
+  # already includes the /chat/completions route's base -- the client
+  # appends only /chat/completions to it.
+  LLM_BASE_URL: "$LLM_BASE_URL"
+  # pride-llm-api reserves Authorization for its own gateway auth -- it wants
+  # the LLM_API_KEY on X-API-Key instead (see backend/app/config.py).
+  LLM_AUTH_HEADER: "X-API-Key"
+  LLM_MODEL: "Qwen/Qwen3.6-27B-FP8"
+  LLM_TEMPERATURE: "0.2"
+  LLM_MAX_TOOL_ROUNDS: "16"
+  LLM_TIMEOUT_SECONDS: "120"
+
+  # ---------- Embeddings ----------
+  # Not wired to a real provider yet (degrades to lexical-only retrieval --
+  # see backend/README.md), so this is usually left unset. When it is set,
+  # EMBEDDING_BASE_URL is a GitLab CI/CD variable like LLM_BASE_URL rather
+  # than committed here -- same reasoning (internal hostname, not for a
+  # GitHub-mirrored repo) whether it ends up pointing at pride-llm-api's
+  # /embeddings route or a separate provider. EMBEDDING_API_KEY is also a
+  # GitLab CI/CD variable.
+  EMBEDDING_BASE_URL: "$EMBEDDING_BASE_URL"
+  EMBEDDING_MODEL: "text-embedding-3-small"
+  EMBEDDING_BATCH_SIZE: "10"
+
+  # ---------- MinerU (PDF parsing) ----------
+  MINERU_MODE: "api"
+  MINERU_FLAVOR: "official"
+  MINERU_BASE_URL: "https://mineru.net/api/v4"
+  MINERU_TIMEOUT_SECONDS: "300"
+  MINERU_POLL_INTERVAL_SECONDS: "5"
+
+  # ---------- Misc ----------
+  MAX_UPLOAD_MB: "30"
+  SESSION_TTL_SECONDS: "7200"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sdrf-assistant
+  labels:
+    app: sdrf-assistant
+spec:
+  replicas: 2
+  revisionHistoryLimit: 10
+  progressDeadlineSeconds: 1200
+  selector:
+    matchLabels:
+      app: sdrf-assistant
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 25%
+      maxSurge: 25%
+  template:
+    metadata:
+      labels:
+        app: sdrf-assistant
+    spec:
+      # GitLab Container Registry images are private -- the deploy job
+      # creates $DOCKER_PULL_SECRET from the project's deploy token before
+      # applying this manifest (see ../../.gitlab-ci.yml).
+      imagePullSecrets:
+        - name: $DOCKER_PULL_SECRET
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      volumes:
+        - name: tmp-volume
+          emptyDir: {}
+      containers:
+        - name: sdrf-assistant
+          # $BACKEND_IMAGE is commit-SHA tagged (see ../../.gitlab-ci.yml),
+          # so there's no long-lived :latest tag to accidentally drift --
+          # each deploy pins the exact image the pride-deploy branch built.
+          image: $BACKEND_IMAGE
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: sdrf-assistant-config
+            - secretRef:
+                name: sdrf-assistant-secrets
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp-volume
+              mountPath: /tmp
+          # Startup runs docker-entrypoint.sh, which (re)builds the spec + cell-line
+          # indexes before uvicorn starts -- give it real time before probes count against it.
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 30
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 60
+      dnsPolicy: ClusterFirst
+      schedulerName: default-scheduler
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sdrf-assistant-service
+  labels:
+    app: sdrf-assistant
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 8000
+      protocol: TCP
+      name: http
+  selector:
+    app: sdrf-assistant

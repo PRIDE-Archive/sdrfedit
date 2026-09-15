@@ -1,0 +1,28 @@
+# No rewrite-target here (unlike backend/k8s/ingress-pride-services.yaml) --
+# the full /pride/services/sdrf-editor/... path is forwarded unchanged,
+# matching the --base-href baked into the Angular build and the nginx.conf
+# layout in this image.
+#
+# Applied manually, once -- not part of the GitLab CI deploy pipeline (see
+# ../../.gitlab-ci.yml), same as pride-archive-api's ingress. Re-apply only
+# if this file itself changes: `kubectl -n sdrf-editor apply -f ingress-pride-services.yaml`.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sdrf-editor-ingress-pride-services
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: www.ebi.ac.uk
+    http:
+      paths:
+      - path: /pride/services/sdrf-editor
+        pathType: Prefix
+        backend:
+          service:
+            name: sdrf-editor-service
+            port:
+              number: 80

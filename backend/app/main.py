@@ -15,14 +15,15 @@ from .rag.store import get_spec_store
 from .routers import chat, uploads
 from .schemas import HealthResult
 
+settings = get_settings()
+
 app = FastAPI(
     title="SDRF Wizard AI Assistant",
     version="1.0.0",
     description="LLM orchestration, specification RAG, PRIDE/paper retrieval and MinerU parsing "
     "for the SDRF Editor creation wizard.",
+    root_path=settings.root_path,
 )
-
-settings = get_settings()
 
 app.add_middleware(
     CORSMiddleware,

@@ -1,0 +1,27 @@
+# BuildKit-specific ignorefile for frontend/Dockerfile -- takes precedence
+# over the root .dockerignore (which is scoped to the backend image and would
+# otherwise exclude src/, angular.json, package.json that this build needs).
+
+# Backend -- not part of the frontend image
+backend/
+
+# sdrf-proteomics -- not part of the frontend image
+sdrf-proteomics/
+
+# Already-built output; rebuilt fresh in the image
+dist/
+
+# Local/dev artifacts
+node_modules/
+.angular/
+scripts/
+package-lock.json
+
+# VCS / IDE / OS
+.git/
+.idea/
+.vscode/
+.DS_Store
+
+# Docs
+*.md

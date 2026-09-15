@@ -1,0 +1,26 @@
+# Applied manually, once -- not part of the GitLab CI deploy pipeline (see
+# ../../.gitlab-ci.yml), same as pride-archive-api's ingress. Re-apply only
+# if this file itself changes: `kubectl -n sdrf-assistant apply -f ingress-pride-services.yaml`.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sdrf-assistant-ingress-pride-services
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/client-max-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: www.ebi.ac.uk
+    http:
+      paths:
+      - path: /pride/services/sdrf-assistant(/|$)(.*)
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: sdrf-assistant-service
+            port:
+              number: 80

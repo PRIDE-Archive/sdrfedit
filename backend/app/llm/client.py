@@ -47,7 +47,14 @@ class LlmClient:
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
         if self._settings.llm_api_key:
-            headers["Authorization"] = f"Bearer {self._settings.llm_api_key}"
+            # Most OpenAI-compatible providers use "Authorization: Bearer <key>".
+            # Some gateways instead expect a distinct header (e.g. X-API-Key)
+            # because Authorization is reserved for a different credential
+            # type -- set LLM_AUTH_HEADER to switch.
+            if self._settings.llm_auth_header.lower() == "x-api-key":
+                headers["X-API-Key"] = self._settings.llm_api_key
+            else:
+                headers["Authorization"] = f"Bearer {self._settings.llm_api_key}"
         return headers
 
     async def stream(
@@ -92,6 +99,14 @@ class LlmClient:
                         chunk = json.loads(payload)
                     except json.JSONDecodeError:
                         continue
+
+                    # Some gateways (e.g. pride-llm-api) answer 200 and stream an
+                    # error as a chunk rather than failing the initial response --
+                    # surface it instead of silently producing an empty answer.
+                    error = chunk.get("error")
+                    if error:
+                        detail = error.get("message") if isinstance(error, dict) else str(error)
+                        raise LlmError(f"LLM stream error: {(detail or '')[:400]}")
 
                     choices = chunk.get("choices") or []
                     if not choices:

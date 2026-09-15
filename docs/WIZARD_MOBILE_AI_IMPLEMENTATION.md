@@ -1,51 +1,53 @@
-# Wizard 移动端与 AI 助手实现说明
+# Wizard Mobile & AI Assistant Implementation Notes
 
-## 目标
+## Goals
 
-本次调整解决两个问题：
+This change addresses two problems:
 
-1. 在手机窄屏上，创建向导与 AI 助手不再以桌面双栏方式互相挤压。
-2. AI 助手不能绕过向导的必填校验跳到后续步骤。
+1. On narrow phone screens, the creation wizard and the AI assistant no longer cramp each other in the desktop two-column layout.
+2. The AI assistant can't bypass the wizard's required-field validation to skip ahead to later steps.
 
-## 响应式交互
+## Responsive Behavior
 
-- `1024px` 及以上保持现有桌面双栏：向导在左，AI 助手在右，并允许拖动调整助手宽度。
-- 小于 `1024px` 时使用单页模式，覆盖手机和常见竖屏平板：
-  - 向导占满视口，首次打开默认显示向导。
-  - 点击 `Ask AI` 后，AI 助手占满视口并暂时隐藏向导。
-  - 点击助手右上角关闭按钮返回向导，聊天和表单状态均保留。
-  - 隐藏助手左侧拖拽条，忽略桌面端保存的面板宽度。
-- 窄屏高度使用 `100dvh`，适配移动浏览器动态地址栏；内容区和底部导航缩小留白。
-- 顶部步骤条仍可横向滚动，保留完整步骤名称和返回已访问步骤的能力。
+- At `1024px` and above, the existing desktop two-column layout is kept: wizard on the left, AI assistant on the right, with a draggable divider to resize the assistant panel.
+- Below `1024px`, a single-page mode is used, covering phones and common portrait tablets:
+  - The wizard fills the viewport, and is shown by default on first open.
+  - After clicking `Ask AI`, the AI assistant fills the viewport and temporarily hides the wizard.
+  - Clicking the close button in the assistant's top-right corner returns to the wizard; both the chat and form state are preserved.
+  - The assistant's left-side drag handle is hidden, and the panel width saved from desktop is ignored.
+- Narrow screens use `100dvh` for height, to accommodate mobile browsers' dynamic address bar; the content area and bottom navigation reduce their padding accordingly.
+- The top step bar remains horizontally scrollable, preserving full step names and the ability to go back to previously visited steps.
 
-## 导航约束
+## Navigation Constraints
 
-AI 返回的 `nextStep` 只作为导航建议，前端必须再次判断：
+The `nextStep` returned by the AI is only a navigation suggestion; the frontend must independently judge it:
 
-- 目标为紧邻的下一步时，只有当前步骤 `canProceed()` 为真才允许前进。
-- 目标为当前步骤或已经访问过的步骤时允许导航。
-- 跨越多个步骤、越界或当前步骤未完成时拒绝导航。
+- When the target is the immediately next step, forward navigation is only allowed if the current step's `canProceed()` is true.
+- Navigation is allowed when the target is the current step or a step already visited.
+- Navigation is rejected when it spans multiple steps, is out of bounds, or the current step is incomplete.
 
-拒绝导航时不发送下一页的自动咨询请求，避免聊天内容与实际表单页面不一致。
+When navigation is rejected, no automatic follow-up request is sent for the next page, to avoid the chat content getting out of sync with the actual form page.
 
-## 草稿安全
+## Draft Safety
 
-- 点击遮罩不再直接关闭向导，避免手机滚动或点击时误触后清空草稿。
-- 显式点击向导关闭按钮仍视为放弃本轮草稿，并保持原有清理逻辑。
-- 关闭 AI 助手仅隐藏面板，不清理聊天或向导状态。
+- Clicking the overlay no longer closes the wizard directly, to avoid accidentally clearing the draft from a stray scroll or tap on mobile.
+- Explicitly clicking the wizard's close button is still treated as abandoning the current draft, and keeps the original cleanup logic.
+- Closing the AI assistant only hides the panel; it does not clear the chat or wizard state.
 
-## 验证范围
+## Test Coverage
 
-- 纯函数测试覆盖：正常前进、校验失败、返回、跨步和越界目标。
-- Angular 生产构建用于检查组件模板、样式及 TypeScript 集成。
-- 手工验收建议覆盖 `390x844`、`768x1024` 和常见桌面宽度。
+- Pure function tests cover: normal progression, validation failure, going back, skipping steps, and out-of-bounds targets.
+- An Angular production build is used to check component templates, styles, and TypeScript integration.
+- Manual acceptance testing is recommended at `390x844`, `768x1024`, and common desktop widths.
 
-## 服务器发布
+## Server Deployment
 
-Nginx 直接提供 `/www/wwwroot/www.sdrf.site` 中的前端文件，并将 `/api/`
-代理到本机 AI 服务。提交新的 `dist/**` 后，`deploy-frontend.yml` 通过 SSH
-连接服务器；只有工作树无 tracked 改动且能 fast-forward 时才更新仓库，然后
-运行 `scripts/deploy-frontend.sh`。脚本复制构建产物后检查首页和 `/api/health`。
+Nginx serves the frontend files directly from `/www/wwwroot/www.sdrf.site`, and proxies `/api/`
+to the local AI service. After new `dist/**` files are committed, `deploy-frontend.yml` connects
+to the server via SSH; the repository is only updated when the working tree has no tracked
+changes and can fast-forward, after which `scripts/deploy-frontend.sh` runs. The script copies
+the build artifacts and then checks the homepage and `/api/health`.
 
-`build-dist.yml` 生成的 dist-only 提交不再包含 `[skip ci]`，因此也会触发上述
-部署流程；该工作流本身不监听 `dist/**`，不会形成递归构建。
+The dist-only commits produced by `build-dist.yml` no longer include `[skip ci]`, so they also
+trigger the deployment flow above; that workflow itself doesn't watch `dist/**`, so it doesn't
+create a recursive build loop.

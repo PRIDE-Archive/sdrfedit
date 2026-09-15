@@ -5,7 +5,7 @@
 
 Browser-based editor for the Sample and Data Relationship Format (SDRF): create, edit, validate, and export proteomics sample–data relationship tables. This fork builds on [bigbio/sdrfedit](https://github.com/bigbio/sdrfedit) with an improved **6-step creation wizard** and an optional **wizard AI assistant**.
 
-For a longer Chinese walkthrough, see [USER.md](USER.md).
+For a longer walkthrough, see [USER.md](USER.md).
 
 ## Highlights
 

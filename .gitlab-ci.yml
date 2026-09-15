@@ -1,0 +1,110 @@
+# GitLab CI/CD for sdrfedit -- builds backend/frontend images, pushes to this
+# project's GitLab Container Registry, and deploys to hh-11 Kubernetes.
+#
+# Structure and idioms follow pride-archive-api's .gitlab-ci.yml /
+# .kubernetes.yml: a single envsubst-templated manifest per app
+# (backend/k8s/kubernetes.yml, frontend/k8s/kubernetes.yml), imperative
+# namespace/imagePullSecret creation, and environment-scoped GitLab CI/CD
+# variables (KUBE_CONFIG, LLM_API_KEY, etc. -- see backend/k8s/README.md)
+# rather than a committed/locally-applied secret.yaml.
+#
+# Scoped to the pride-deploy branch only, matching the existing hh-11
+# testing setup (see .github/workflows/*-build-and-push.yml). Point at main
+# once this is promoted beyond hh-11 testing.
+
+variables:
+  DOCKER_PULL_SECRET: sdrfedit-gitlab-docker-secret
+  BACKEND_IMAGE: $CI_REGISTRY_IMAGE/backend/$CI_COMMIT_REF_SLUG:${CI_PIPELINE_ID}-${CI_COMMIT_SHA}
+  FRONTEND_IMAGE: $CI_REGISTRY_IMAGE/frontend/$CI_COMMIT_REF_SLUG:${CI_PIPELINE_ID}-${CI_COMMIT_SHA}
+
+stages:
+  - test
+  - build
+  - deploy
+
+pytest:
+  stage: test
+  image: python:3.11
+  script:
+    - cd backend
+    - pip install --no-cache-dir -r requirements.txt -r requirements-dev.txt
+    - python -m pytest tests -q
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_MERGE_REQUEST_ID'
+
+.docker_build:
+  stage: build
+  image: docker:24.0.5
+  variables:
+    DOCKER_TLS_CERTDIR: ""
+  services:
+    - docker:27.1.2-dind
+  script:
+    - apk add --update bash gettext tzdata coreutils ca-certificates wget
+    - update-ca-certificates
+    - docker info
+    - docker build -f $DOCKERFILE -t $IMAGE .
+    - docker login -u gitlab-ci-token -p $CI_JOB_TOKEN $CI_REGISTRY
+    - docker push $IMAGE
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "pride-deploy"'
+  when: manual
+
+docker_build_backend:
+  extends: .docker_build
+  variables:
+    DOCKERFILE: backend/Dockerfile
+    IMAGE: $BACKEND_IMAGE
+
+docker_build_frontend:
+  extends: .docker_build
+  variables:
+    DOCKERFILE: frontend/Dockerfile
+    IMAGE: $FRONTEND_IMAGE
+
+.kube_deploy:
+  stage: deploy
+  image: dtzar/helm-kubectl
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "pride-deploy"'
+  when: manual
+  before_script:
+    - apk add --update bash gettext tzdata coreutils
+    - mkdir -p ~/.kube
+    - echo $KUBE_CONFIG | base64 -d > ~/.kube/config
+    - kubectl config get-contexts
+    - kubectl create namespace $K8S_NAMESPACE || true
+    - kubectl -n $K8S_NAMESPACE delete secret $DOCKER_PULL_SECRET || true
+    - kubectl -n $K8S_NAMESPACE create secret docker-registry $DOCKER_PULL_SECRET --docker-server=$CI_REGISTRY --docker-username=$CI_DEPLOY_USER --docker-password=$CI_DEPLOY_PASSWORD
+
+# Deploy target naming carries the cluster (hh-11) since, unlike
+# pride-archive-api's single app deployed to several clusters, sdrfedit is
+# two apps deployed to one cluster -- add _hx11 siblings here if a second
+# cluster is ever needed.
+deploy_backend_hh11:
+  extends: .kube_deploy
+  variables:
+    K8S_NAMESPACE: sdrf-assistant
+  environment: hh-11-sdrf-assistant
+  script:
+    # App secrets come from GitLab CI/CD variables (masked, protected on
+    # pride-deploy), not a locally-applied secret.yaml -- see
+    # backend/k8s/README.md.
+    - kubectl -n sdrf-assistant delete secret sdrf-assistant-secrets || true
+    - kubectl -n sdrf-assistant create secret generic sdrf-assistant-secrets --from-literal=LLM_API_KEY="$LLM_API_KEY" --from-literal=EMBEDDING_API_KEY="$EMBEDDING_API_KEY" --from-literal=MINERU_API_KEY="$MINERU_API_KEY"
+    - envsubst < backend/k8s/kubernetes.yml > kubernetes.yml
+    - cat kubernetes.yml
+    - kubectl -n sdrf-assistant apply -f kubernetes.yml
+    - kubectl -n sdrf-assistant rollout status deployment/sdrf-assistant --timeout=600s
+
+deploy_frontend_hh11:
+  extends: .kube_deploy
+  variables:
+    K8S_NAMESPACE: sdrf-editor
+  environment: hh-11-sdrf-editor
+  script:
+    - envsubst < frontend/k8s/kubernetes.yml > kubernetes.yml
+    - cat kubernetes.yml
+    - kubectl -n sdrf-editor apply -f kubernetes.yml
+    - kubectl -n sdrf-editor rollout status deployment/sdrf-editor --timeout=300s

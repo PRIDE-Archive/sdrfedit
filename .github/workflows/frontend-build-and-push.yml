@@ -1,0 +1,72 @@
+name: Frontend - Build and Push to GitHub Container Registry
+
+on:
+  push:
+    # pride-deploy: a testing/staging branch used to build and push an image
+    # for manual kubectl deploys to hh-11, without touching :latest (that
+    # only moves on a push to main).
+    branches: [ main, pride-deploy ]
+    paths:
+      - "src/**"
+      - "angular.json"
+      - "package.json"
+      - "tsconfig*.json"
+      - "frontend/**"
+      - ".github/workflows/frontend-build-and-push.yml"
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine tags
+        id: tags
+        run: |
+          # Dynamic (not hardcoded to an org) so a repo transfer doesn't
+          # silently break pushes -- GITHUB_TOKEN's package-write scope
+          # follows the repo's CURRENT owner. Lowercased: GHCR/Docker image
+          # names must be lowercase, but github.repository isn't (this org
+          # is "PRIDE-Archive"), and Actions expressions have no toLower().
+          IMAGE_NAME="$(echo '${{ github.repository }}-frontend' | tr '[:upper:]' '[:lower:]')"
+          TAGS="${{ env.REGISTRY }}/$IMAGE_NAME:${{ github.sha }}"
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            TAGS="$TAGS,${{ env.REGISTRY }}/$IMAGE_NAME:latest"
+          elif [ "${{ github.ref_name }}" = "pride-deploy" ]; then
+            TAGS="$TAGS,${{ env.REGISTRY }}/$IMAGE_NAME:pride"
+          fi
+          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          # Build context is the repo root: the frontend needs
+          # package.json/angular.json/src/ at the top level.
+          context: .
+          file: frontend/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

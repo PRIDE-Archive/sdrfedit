@@ -1,0 +1,39 @@
+# Used for backend image builds: `docker build -f backend/Dockerfile .`
+# Only backend/ and the two sdrf-proteomics/*.tsv tables the backend reads
+# actually need to reach the build context.
+
+# Frontend (Angular) — not part of the backend image
+.angular/
+node_modules/
+dist/
+src/
+scripts/
+angular.json
+package.json
+package-lock.json
+tsconfig*.json
+
+# sdrf-proteomics: keep only the two TSVs the backend reads
+sdrf-proteomics/*.adoc
+sdrf-proteomics/TERMS.tsv
+
+# Backend: local/dev artifacts not needed in the image. Secrets are injected
+# at runtime via the k8s Secret/ConfigMap (see backend/k8s/), never baked
+# into the image, so backend/.env must never reach it either.
+backend/.env
+backend/.venv/
+backend/data/spec_index/
+backend/data/cellline_index/
+backend/tests/
+backend/.pytest_cache/
+
+# VCS / IDE / OS
+.git/
+.idea/
+.vscode/
+.DS_Store
+
+# Python
+__pycache__/
+*.py[codz]
+*.egg-info/

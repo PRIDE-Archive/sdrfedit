@@ -68,9 +68,9 @@ const KIND_MONOGRAMS: Record<ToolKind, string> = {
             @if (!running() && call().durationMs) {
               <span class="time">{{ duration() }}</span>
             }
-            <span class="hint">{{ open() ? '收起' : '查看详情' }}</span>
+            <span class="hint">{{ open() ? 'Collapse' : 'View details' }}</span>
           </span>
-          <span class="summary">{{ call().summary || (running() ? '执行中…' : '') }}</span>
+          <span class="summary">{{ call().summary || (running() ? 'Running…' : '') }}</span>
         </span>
       </button>
 
@@ -83,16 +83,16 @@ const KIND_MONOGRAMS: Record<ToolKind, string> = {
             }
             @if (call().resultJson) {
               <button class="copy" (click)="copy($event)">
-                {{ copied() ? '已复制' : '复制 JSON' }}
+                {{ copied() ? 'Copied' : 'Copy JSON' }}
               </button>
             }
           </div>
           @if (call().resultJson) {
             <pre class="json">{{ call().resultJson }}</pre>
           } @else if (running()) {
-            <p class="empty">工具仍在执行，完成后结果会显示在这里。</p>
+            <p class="empty">The tool is still running; the result will appear here once it finishes.</p>
           } @else {
-            <p class="empty">该工具未返回结果内容。</p>
+            <p class="empty">This tool did not return any result content.</p>
           }
         </div>
       }

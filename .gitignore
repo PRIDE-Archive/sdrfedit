@@ -237,6 +237,11 @@ backend/.venv/
 backend/data/spec_index/
 backend/data/cellline_index/
 
+# Wizard assistant backend k8s secrets (never commit real keys)
+backend/k8s/secret.yaml
+backend/k8s/*.local.yaml
+backend/k8s/*.local.md
+
 # Local LLM secrets / session artifacts (never commit API keys)
 **/llm.local.json
 .tmp-nginx/

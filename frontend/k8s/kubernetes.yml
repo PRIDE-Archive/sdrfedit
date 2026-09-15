@@ -1,0 +1,97 @@
+# Combined manifest applied by GitLab CI (../../.gitlab-ci.yml, deploy_frontend_hh11)
+# via `envsubst < kubernetes.yml | kubectl -n sdrf-editor apply -f -`.
+# No metadata.namespace fields on purpose -- the namespace comes from the
+# `-n` flag at apply time, not the manifest, matching pride-archive-api's
+# .kubernetes.yml convention. For a manual deploy see deploy.sh.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sdrf-editor
+  labels:
+    app: sdrf-editor
+spec:
+  replicas: 2
+  revisionHistoryLimit: 10
+  progressDeadlineSeconds: 600
+  selector:
+    matchLabels:
+      app: sdrf-editor
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 25%
+      maxSurge: 25%
+  template:
+    metadata:
+      labels:
+        app: sdrf-editor
+    spec:
+      # GitLab Container Registry images are private -- the deploy job
+      # creates $DOCKER_PULL_SECRET from the project's deploy token before
+      # applying this manifest (see ../../.gitlab-ci.yml).
+      imagePullSecrets:
+        - name: $DOCKER_PULL_SECRET
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: sdrf-editor
+          # $FRONTEND_IMAGE is commit-SHA tagged (see ../../.gitlab-ci.yml),
+          # so there's no long-lived :latest tag to accidentally drift --
+          # each deploy pins the exact image the pride-deploy branch built.
+          image: $FRONTEND_IMAGE
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "25m"
+            limits:
+              memory: "128Mi"
+              cpu: "250m"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          livenessProbe:
+            httpGet:
+              path: /pride/services/sdrf-editor/
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /pride/services/sdrf-editor/
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+      restartPolicy: Always
+      dnsPolicy: ClusterFirst
+      schedulerName: default-scheduler
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sdrf-editor-service
+  labels:
+    app: sdrf-editor
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP
+      name: http
+  selector:
+    app: sdrf-editor

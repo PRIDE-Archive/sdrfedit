@@ -17,11 +17,18 @@ import {
 
 const RUNTIME_OVERRIDE_KEY = 'sdrf_assistant_url';
 
-/** Extra origins to try when the page is opened via IP or domain. */
+/**
+ * Extra backend bases to try when the page is opened via IP or domain.
+ * Despite the name, a full base URL (including a sub-path) works too -- the
+ * hh-11 deployment serves the backend under a path, not at its origin root,
+ * so location.origin alone (tried first, in assistantUrlCandidates) can't
+ * find it.
+ */
 const HOSTED_ASSISTANT_ORIGINS = [
   'http://47.93.36.196',
   'http://www.sdrf.site',
   'https://www.sdrf.site',
+  'https://www.ebi.ac.uk/pride/services/sdrf-assistant',
 ];
 
 function normalizeOrigin(url: string): string {

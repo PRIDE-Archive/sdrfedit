@@ -39,9 +39,33 @@ from .prompts import (
     render_step_focus,
     render_wizard_context,
 )
+from .thinking import ThinkingSplitter
 
 MAX_HISTORY_MESSAGES = 24
 PROPOSE_TOOL_NAME = "propose_wizard_actions"
+
+# A round can end with a ThinkingSplitter that never saw </think> for two very
+# different reasons: the model answered directly (short, legitimate), or it
+# was still mid-thought when cut off by the token cap (observed in testing --
+# the model can spiral into repetitive reasoning for thousands of tokens
+# before ever closing the block). Length is the only signal available to
+# tell them apart; a genuine direct answer is nowhere near this long.
+MAX_UNCLOSED_THINKING_CHARS = 800
+CUTOFF_FALLBACK_MESSAGE = (
+    "Sorry, that took too long to think through and got cut off. Could you try again?"
+)
+
+
+def _resolve_round_text(text: str, saw_close_tag: bool) -> str:
+    """Guard against dumping a runaway, unclosed <think> block on the user.
+
+    Only applies when </think> was never seen this round -- text that
+    already streamed after a genuine close tag is never touched here,
+    however long it legitimately is.
+    """
+    if not saw_close_tag and len(text) > MAX_UNCLOSED_THINKING_CHARS:
+        return CUTOFF_FALLBACK_MESSAGE
+    return text
 
 # The panel lets the user expand a tool result; beyond this it is unreadable
 # anyway and only costs bandwidth.
@@ -124,38 +148,38 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
     focus_step = resolve_focus_step(request)
     skill = _resolve_skill(request)
 
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "system", "content": render_wizard_context(request.wizardState)},
-        {"role": "system", "content": render_step_focus(focus_step, request.wizardState)},
+    # Collected as parts and joined into ONE system message below -- some
+    # OpenAI-compatible backends (e.g. vLLM's default chat template) reject a
+    # messages array with more than one system-role entry ("System message
+    # must be at the beginning"), so multiple leading system messages is not
+    # a portable shape even though OpenAI itself tolerates it.
+    system_parts: list[str] = [
+        SYSTEM_PROMPT,
+        render_wizard_context(request.wizardState),
+        render_step_focus(focus_step, request.wizardState),
     ]
 
     if skill:
-        messages.append(
-            {
-                "role": "system",
-                "content": (
-                    f"The user invoked the /{skill.name} skill"
-                    + (f" with arguments: {skill.args}" if skill.args else "")
-                    + ".\n\n"
-                    + skill.instructions
-                ),
-            }
+        system_parts.append(
+            f"The user invoked the /{skill.name} skill"
+            + (f" with arguments: {skill.args}" if skill.args else "")
+            + ".\n\n"
+            + skill.instructions
         )
         yield AgentEvent.status(f"Running /{skill.name}")
 
     evidence = render_evidence([note.text for note in store.get_evidence(request.sessionId)])
     if evidence:
-        messages.append({"role": "system", "content": evidence})
+        system_parts.append(evidence)
 
     accession = request.accession or (skill.accession if skill else None)
     if accession:
-        messages.append(
-            {
-                "role": "system",
-                "content": f"The panel reports the user is working with accession {accession}.",
-            }
-        )
+        system_parts.append(f"The panel reports the user is working with accession {accession}.")
+
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": "\n\n".join(part for part in system_parts if part.strip())}
+    ]
+
     history = request.messages[-MAX_HISTORY_MESSAGES:]
     for index, message in enumerate(history):
         content = message.content
@@ -188,13 +212,21 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
         for _round in range(max(1, settings.llm_max_tool_rounds)):
             round_text: list[str] = []
             calls: list[ToolCall] = []
+            splitter = ThinkingSplitter()
+            yield AgentEvent.status("Thinking…")
 
             async for event in client.stream(messages, tools):
                 if event.type == "token":
-                    round_text.append(event.text)
-                    yield AgentEvent.token(event.text)
+                    visible = splitter.feed(event.text)
+                    if visible:
+                        round_text.append(visible)
+                        yield AgentEvent.token(visible)
                 elif event.type == "tool_calls":
                     calls = event.tool_calls
+            trailing = _resolve_round_text(splitter.flush(), splitter.saw_close_tag)
+            if trailing:
+                round_text.append(trailing)
+                yield AgentEvent.token(trailing)
 
             text = "".join(round_text)
             if text.strip():
@@ -304,7 +336,10 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
             yield AgentEvent.status("Wrapping up — proposing cards from verified evidence")
             messages.append(
                 {
-                    "role": "system",
+                    # "user", not "system": some backends (e.g. vLLM's default chat
+                    # template) reject a system-role message anywhere but the very
+                    # first position ("System message must be at the beginning").
+                    "role": "user",
                     "content": (
                         "Ontology / evidence tool rounds are exhausted. "
                         "You MUST call propose_wizard_actions NOW for the current focus step, "
@@ -317,12 +352,20 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
             )
             closing_text: list[str] = []
             closing_calls: list[ToolCall] = []
+            closing_splitter = ThinkingSplitter()
+            yield AgentEvent.status("Thinking…")
             async for event in client.stream(messages, tools=[PROPOSE_ACTIONS_TOOL]):
                 if event.type == "token":
-                    closing_text.append(event.text)
-                    yield AgentEvent.token(event.text)
+                    visible = closing_splitter.feed(event.text)
+                    if visible:
+                        closing_text.append(visible)
+                        yield AgentEvent.token(visible)
                 elif event.type == "tool_calls":
                     closing_calls = event.tool_calls
+            trailing = _resolve_round_text(closing_splitter.flush(), closing_splitter.saw_close_tag)
+            if trailing:
+                closing_text.append(trailing)
+                yield AgentEvent.token(trailing)
             if closing_text:
                 answer_parts.append("".join(closing_text))
 
