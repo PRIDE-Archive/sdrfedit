@@ -803,10 +803,12 @@ const BUFFER_ROWS = 10;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      background: linear-gradient(135deg, #5bc0be 0%, #4aa9a7 100%);
-      color: white;
+      /* PRIDE's own chrome is light gray with dark text, not a solid/gradient
+         teal fill -- teal is reserved for buttons and small accents. */
+      background: #f5f7f8;
+      color: #17233d;
       padding: 16px 24px;
-      border-bottom: 3px solid #5a67d8;
+      border-bottom: 1px solid #e3e6ea;
       flex-shrink: 0;
       transition: all 0.3s ease;
     }
@@ -836,7 +838,7 @@ const BUFFER_ROWS = 10;
     .banner-subtitle {
       margin: 4px 0 0 0;
       font-size: 13px;
-      opacity: 0.9;
+      color: #808695;
     }
 
     .banner-nav {
@@ -845,25 +847,25 @@ const BUFFER_ROWS = 10;
     }
 
     .nav-link {
-      color: white;
+      color: #17233d;
       text-decoration: none;
       font-size: 13px;
       font-weight: 500;
       padding: 6px 12px;
       border-radius: 4px;
-      background: rgba(255, 255, 255, 0.15);
+      background: rgba(91, 192, 190, 0.14);
       transition: all 0.2s;
     }
 
     .nav-link:hover {
-      background: rgba(255, 255, 255, 0.25);
+      background: rgba(91, 192, 190, 0.24);
       transform: translateY(-1px);
     }
 
     .banner-toggle {
-      background: rgba(255, 255, 255, 0.2);
+      background: rgba(0, 0, 0, 0.05);
       border: none;
-      color: white;
+      color: #495057;
       padding: 4px 12px;
       border-radius: 4px;
       cursor: pointer;
@@ -873,15 +875,17 @@ const BUFFER_ROWS = 10;
     }
 
     .banner-toggle:hover {
-      background: rgba(255, 255, 255, 0.3);
+      background: rgba(0, 0, 0, 0.09);
     }
 
     /* Landing Page Styles */
     .landing-page {
       flex: 1;
       overflow-y: auto;
-      background: linear-gradient(135deg, #5bc0be 0%, #4aa9a7 100%);
-      color: white;
+      /* PRIDE's own pages are white/light-gray chrome, not a gradient hero
+         -- teal is reserved for buttons and small accents. */
+      background: #f5f7f8;
+      color: #17233d;
       display: flex;
       flex-direction: column;
     }
@@ -895,13 +899,13 @@ const BUFFER_ROWS = 10;
       font-size: 48px;
       margin: 0 0 16px 0;
       font-weight: 700;
-      text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+      color: #17233d;
     }
 
     .tagline {
       font-size: 18px;
       margin: 0;
-      opacity: 0.95;
+      color: #4b5563;
     }
 
     .landing-actions {
@@ -916,16 +920,16 @@ const BUFFER_ROWS = 10;
 
     .landing-actions .url-input {
       padding: 10px 14px;
-      border: 1px solid rgba(255, 255, 255, 0.5);
+      border: 1px solid #dcdee2;
       border-radius: 6px;
       font-size: 14px;
       min-width: 280px;
-      background: rgba(255, 255, 255, 0.15);
-      color: white;
+      background: white;
+      color: #17233d;
     }
 
     .landing-actions .url-input::placeholder {
-      color: rgba(255, 255, 255, 0.7);
+      color: #9aa0a8;
     }
 
     .btn-large {
