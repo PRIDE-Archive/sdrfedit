@@ -222,9 +222,9 @@ import { WizardAiPanelComponent } from '../wizard-ai-panel/wizard-ai-panel.compo
     }
 
     .btn-assistant {
-      background: #eef2ff;
-      color: #4338ca;
-      border: 1px solid #c7d2fe;
+      background: #eafaf9;
+      color: #17233d;
+      border: 1px solid #bde6e5;
       border-radius: 6px;
       padding: 5px 12px;
       font-size: 12.5px;
@@ -233,7 +233,7 @@ import { WizardAiPanelComponent } from '../wizard-ai-panel/wizard-ai-panel.compo
     }
 
     .btn-assistant:hover {
-      background: #e0e7ff;
+      background: #eafaf9;
     }
 
     @keyframes slideUp {

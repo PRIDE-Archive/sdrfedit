@@ -550,7 +550,7 @@ const DEFAULT_WIDTH = 400;
       cursor: col-resize;
       z-index: 2;
     }
-    .resizer:hover { background: rgba(99, 102, 241, 0.18); }
+    .resizer:hover { background: rgba(74, 169, 167, 0.18); }
 
     /* ------------------------------------------------------------- header */
 
@@ -577,7 +577,7 @@ const DEFAULT_WIDTH = 400;
       width: 22px;
       height: 22px;
       border-radius: 6px;
-      background: #4f46e5;
+      background: #5bc0be;
       color: white;
       font-size: 9.5px;
       font-weight: 700;
@@ -613,7 +613,7 @@ const DEFAULT_WIDTH = 400;
 
     .collapsed .name, .collapsed .tag, .collapsed .title-stack { display: none; }
 
-    .icon-btn.active { background: #eef2ff; color: #4338ca; }
+    .icon-btn.active { background: #eafaf9; color: #17233d; }
 
     /* ------------------------------------------------------ history drawer */
 
@@ -642,15 +642,15 @@ const DEFAULT_WIDTH = 400;
       width: 100%;
       margin-bottom: 8px;
       background: white;
-      border: 1px dashed #c7d2fe;
-      color: #4338ca;
+      border: 1px dashed #bde6e5;
+      color: #17233d;
       border-radius: 7px;
       padding: 6px 8px;
       font-size: 12px;
       font-weight: 600;
       cursor: pointer;
     }
-    .history-new:hover:not(:disabled) { background: #eef2ff; }
+    .history-new:hover:not(:disabled) { background: #eafaf9; }
     .history-new:disabled { opacity: 0.5; cursor: default; }
 
     .history-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
@@ -664,7 +664,7 @@ const DEFAULT_WIDTH = 400;
       border: 1px solid #e6e8ef;
       padding: 2px;
     }
-    .history-item.active { border-color: #c7d2fe; background: #f5f7ff; }
+    .history-item.active { border-color: #bde6e5; background: #eafaf9; }
 
     .history-open {
       flex: 1;
@@ -707,7 +707,7 @@ const DEFAULT_WIDTH = 400;
       flex: 1;
       margin: 3px;
       padding: 4px 6px;
-      border: 1px solid #c7d2fe;
+      border: 1px solid #bde6e5;
       border-radius: 5px;
       font-size: 12px;
     }
@@ -722,8 +722,8 @@ const DEFAULT_WIDTH = 400;
     .tag {
       flex-shrink: 0;
       font-size: 10px;
-      background: #eef2ff;
-      color: #4338ca;
+      background: #eafaf9;
+      color: #17233d;
       padding: 2px 7px;
       border-radius: 999px;
     }
@@ -760,8 +760,8 @@ const DEFAULT_WIDTH = 400;
     }
 
     .strip-index {
-      background: #eef2ff;
-      color: #4338ca;
+      background: #eafaf9;
+      color: #17233d;
       border-radius: 5px;
       padding: 1px 6px;
       font-size: 10px;
@@ -783,14 +783,14 @@ const DEFAULT_WIDTH = 400;
       flex-shrink: 0;
       background: white;
       border: 1px solid #d5d9e2;
-      color: #4338ca;
+      color: #17233d;
       border-radius: 6px;
       padding: 3px 9px;
       font-size: 11px;
       font-weight: 600;
       cursor: pointer;
     }
-    .strip-action:hover:not(:disabled) { background: #eef2ff; border-color: #c7d2fe; }
+    .strip-action:hover:not(:disabled) { background: #eafaf9; border-color: #bde6e5; }
     .strip-action:disabled { color: #b0b6c1; cursor: default; }
 
     .strip-track {
@@ -801,7 +801,7 @@ const DEFAULT_WIDTH = 400;
     }
     .strip-fill {
       height: 100%;
-      background: #4f46e5;
+      background: #5bc0be;
       border-radius: 999px;
       transition: width 0.25s ease;
     }
@@ -850,8 +850,8 @@ const DEFAULT_WIDTH = 400;
     .intro-title { font-weight: 600; color: #111827; margin: 0 0 6px; font-size: 13.5px; }
     .intro-body { margin: 0 0 14px; }
     .intro-body code {
-      background: #eef2ff;
-      color: #4338ca;
+      background: #eafaf9;
+      color: #17233d;
       border-radius: 4px;
       padding: 1px 5px;
       font-size: 11.5px;
@@ -870,15 +870,15 @@ const DEFAULT_WIDTH = 400;
       padding: 8px 11px;
       cursor: pointer;
     }
-    .quick:hover { border-color: #c7d2fe; background: #fafbff; }
-    .quick-label { font-weight: 600; color: #4338ca; font-size: 12px; }
+    .quick:hover { border-color: #bde6e5; background: #eafaf9; }
+    .quick-label { font-weight: 600; color: #17233d; font-size: 12px; }
     .quick-hint { color: #9ca3af; font-size: 11px; }
 
     .user-row { display: flex; justify-content: flex-end; }
 
     .user-bubble {
       max-width: 88%;
-      background: #4f46e5;
+      background: #5bc0be;
       color: white;
       border-radius: 12px 12px 3px 12px;
       padding: 8px 11px;
@@ -898,7 +898,7 @@ const DEFAULT_WIDTH = 400;
       padding: 10px 12px;
       box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
     }
-    .file-card.parsing { border-color: #c7d2fe; background: #f8f9ff; }
+    .file-card.parsing { border-color: #bde6e5; background: #eafaf9; }
     .file-card.error { border-color: #fecaca; background: #fffafa; }
 
     .file-thumb {
@@ -942,7 +942,7 @@ const DEFAULT_WIDTH = 400;
       text-overflow: ellipsis;
     }
     .file-status { color: #16a34a; font-size: 11.5px; }
-    .file-card.parsing .file-status { color: #4338ca; }
+    .file-card.parsing .file-status { color: #17233d; }
     .file-card.error .file-status { color: #b91c1c; }
     .file-sections {
       color: #9ca3af;
@@ -966,7 +966,7 @@ const DEFAULT_WIDTH = 400;
     }
     .skill-mark { color: #a5b4fc; font-weight: 700; }
     .skill-name { font-weight: 600; }
-    .skill-args { color: #c7d2fe; }
+    .skill-args { color: #bde6e5; }
 
     .slash-menu {
       margin-bottom: 8px;
@@ -989,10 +989,10 @@ const DEFAULT_WIDTH = 400;
       font: inherit;
     }
     .slash-item:last-child { border-bottom: none; }
-    .slash-item:hover { background: #f5f7ff; }
+    .slash-item:hover { background: #eafaf9; }
     .slash-item code {
       font-size: 12px;
-      color: #4338ca;
+      color: #17233d;
       font-weight: 600;
     }
     .slash-item span { font-size: 11.5px; color: #6b7280; }
@@ -1040,7 +1040,7 @@ const DEFAULT_WIDTH = 400;
       width: 7px;
       height: 7px;
       border-radius: 50%;
-      background: #6366f1;
+      background: #4aa9a7;
       animation: pulse 1.1s ease-in-out infinite;
     }
 
@@ -1112,11 +1112,11 @@ const DEFAULT_WIDTH = 400;
       padding: 8px 10px;
     }
 
-    .next-text { flex: 1; color: #4338ca; font-size: 11.5px; font-weight: 600; }
+    .next-text { flex: 1; color: #17233d; font-size: 11.5px; font-weight: 600; }
 
     .next-btn {
       flex-shrink: 0;
-      background: #4f46e5;
+      background: #5bc0be;
       border: none;
       color: white;
       border-radius: 6px;
@@ -1125,7 +1125,7 @@ const DEFAULT_WIDTH = 400;
       font-weight: 600;
       cursor: pointer;
     }
-    .next-btn:hover:not(:disabled) { background: #4338ca; }
+    .next-btn:hover:not(:disabled) { background: #17233d; }
     .next-btn:disabled { background: #b6b9d8; cursor: default; }
 
     /* ----------------------------------------------------------- composer */
@@ -1156,8 +1156,8 @@ const DEFAULT_WIDTH = 400;
       overflow: hidden;
     }
     .composer-box:focus-within {
-      border-color: #6366f1;
-      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+      border-color: #4aa9a7;
+      box-shadow: 0 0 0 3px rgba(74, 169, 167, 0.12);
     }
     .composer-box.disabled { background: #f8f9fc; }
 
@@ -1172,7 +1172,7 @@ const DEFAULT_WIDTH = 400;
       background: #f8fafc;
       max-width: 280px;
     }
-    .composer-file.parsing { border-color: #c7d2fe; background: #f5f7ff; }
+    .composer-file.parsing { border-color: #bde6e5; background: #eafaf9; }
     .composer-file.error { border-color: #fecaca; background: #fffafa; }
     .composer-file.ready { border-color: #e5e7eb; }
 
@@ -1188,8 +1188,8 @@ const DEFAULT_WIDTH = 400;
     .composer-file-spinner {
       width: 18px;
       height: 18px;
-      border: 2px solid #c7d2fe;
-      border-top-color: #4f46e5;
+      border: 2px solid #bde6e5;
+      border-top-color: #5bc0be;
       border-radius: 50%;
       animation: spin 0.7s linear infinite;
     }
@@ -1242,7 +1242,7 @@ const DEFAULT_WIDTH = 400;
       font-size: 11px;
       color: #6b7280;
     }
-    .composer-file.parsing .composer-file-status { color: #4338ca; }
+    .composer-file.parsing .composer-file-status { color: #17233d; }
     .composer-file.error .composer-file-status { color: #b91c1c; }
 
     .composer-file-remove {
@@ -1308,11 +1308,11 @@ const DEFAULT_WIDTH = 400;
     }
 
     .icon-action.send {
-      background: #4f46e5;
+      background: #5bc0be;
       color: white;
     }
     .icon-action.send:hover:not(:disabled) {
-      background: #4338ca;
+      background: #17233d;
       color: white;
     }
     .icon-action.send:disabled {

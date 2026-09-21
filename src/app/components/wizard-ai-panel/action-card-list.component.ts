@@ -245,7 +245,7 @@ const LAYER_LABEL: Record<LayerKind, string> = {
     .layer-badge[data-layer='technology'] { background: #dcfce7; color: #166534; }
     .layer-badge[data-layer='sample'] { background: #dbeafe; color: #1e40af; }
     .layer-badge[data-layer='experiment'] { background: #fef3c7; color: #92400e; }
-    .layer-badge[data-layer='count'] { background: #e0e7ff; color: #3730a3; }
+    .layer-badge[data-layer='count'] { background: #eafaf9; color: #3730a3; }
     .layer-badge[data-layer='description'] { background: #f3e8ff; color: #6b21a8; }
 
     .card-label {

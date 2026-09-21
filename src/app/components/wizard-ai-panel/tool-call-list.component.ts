@@ -106,7 +106,7 @@ const KIND_MONOGRAMS: Record<ToolKind, string> = {
       overflow: hidden;
     }
     .block.failed { border-color: #fecaca; background: #fffafa; }
-    .block.running { border-color: #c7d2fe; background: #f8f9ff; }
+    .block.running { border-color: #bde6e5; background: #eafaf9; }
 
     .head {
       display: flex;
@@ -138,8 +138,8 @@ const KIND_MONOGRAMS: Record<ToolKind, string> = {
       width: 16px;
       height: 16px;
       margin-top: 2px;
-      border: 2px solid #c7d2fe;
-      border-top-color: #4f46e5;
+      border: 2px solid #bde6e5;
+      border-top-color: #5bc0be;
       border-radius: 50%;
       animation: spin 0.7s linear infinite;
     }
@@ -179,7 +179,7 @@ const KIND_MONOGRAMS: Record<ToolKind, string> = {
       margin-left: auto;
       font-weight: 500;
       font-size: 10.5px;
-      color: #6366f1;
+      color: #4aa9a7;
     }
 
     .summary {
@@ -191,7 +191,7 @@ const KIND_MONOGRAMS: Record<ToolKind, string> = {
       white-space: pre-wrap;
       word-break: break-word;
     }
-    .running .summary { color: #4338ca; }
+    .running .summary { color: #17233d; }
     .failed .summary { color: #b91c1c; }
 
     .body { padding: 0 10px 10px 52px; }

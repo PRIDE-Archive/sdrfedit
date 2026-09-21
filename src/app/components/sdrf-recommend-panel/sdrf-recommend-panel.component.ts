@@ -733,7 +733,7 @@ type ViewTab = 'recommendations' | 'quality' | 'advanced';
       justify-content: space-between;
       align-items: center;
       padding: 12px 16px;
-      background: #667eea;
+      background: #5bc0be;
       color: white;
       flex-shrink: 0;
     }
@@ -792,7 +792,7 @@ type ViewTab = 'recommendations' | 'quality' | 'advanced';
       width: 32px;
       height: 32px;
       border: 3px solid #e5e7eb;
-      border-top-color: #6366f1;
+      border-top-color: #4aa9a7;
       border-radius: 50%;
       animation: init-spin 0.8s linear infinite;
     }
@@ -828,13 +828,13 @@ type ViewTab = 'recommendations' | 'quality' | 'advanced';
     }
     .tab:hover { background: #f9fafb; }
     .tab.active {
-      color: #667eea;
-      border-bottom-color: #667eea;
+      color: #5bc0be;
+      border-bottom-color: #5bc0be;
       font-weight: 500;
     }
 
     .tab-badge {
-      background: #667eea;
+      background: #5bc0be;
       color: white;
       font-size: 10px;
       padding: 1px 6px;
@@ -1107,9 +1107,9 @@ type ViewTab = 'recommendations' | 'quality' | 'advanced';
     }
     .pill:hover { background: #f3f4f6; }
     .pill.active {
-      background: #667eea;
+      background: #5bc0be;
       color: white;
-      border-color: #667eea;
+      border-color: #5bc0be;
     }
 
     .batch-actions {
@@ -1174,7 +1174,7 @@ type ViewTab = 'recommendations' | 'quality' | 'advanced';
     .type-fill_value { background: #dbeafe; color: #1d4ed8; }
     .type-correct_value { background: #fef3c7; color: #b45309; }
     .type-ontology_suggestion { background: #f3e8ff; color: #7c3aed; }
-    .type-consistency_fix { background: #e0e7ff; color: #4338ca; }
+    .type-consistency_fix { background: #eafaf9; color: #17233d; }
 
     .rec-column-name {
       font-weight: 600;
@@ -1300,7 +1300,7 @@ type ViewTab = 'recommendations' | 'quality' | 'advanced';
     .prompt-preview summary {
       cursor: pointer;
       font-size: 11px;
-      color: #667eea;
+      color: #5bc0be;
     }
 
     .prompt-content {
@@ -1341,7 +1341,7 @@ type ViewTab = 'recommendations' | 'quality' | 'advanced';
     .btn:hover:not(:disabled) { background: #f3f4f6; }
 
     .btn-primary {
-      background: #667eea;
+      background: #5bc0be;
       color: white;
       border: none;
     }
@@ -1368,7 +1368,7 @@ type ViewTab = 'recommendations' | 'quality' | 'advanced';
       width: 10px;
       height: 10px;
       border: 2px solid #d1d5db;
-      border-top-color: #667eea;
+      border-top-color: #5bc0be;
       border-radius: 50%;
       animation: spin 0.8s linear infinite;
     }

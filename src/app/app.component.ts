@@ -14,6 +14,14 @@ import { SdrfEditorComponent } from './components/sdrf-editor/sdrf-editor.compon
   imports: [FormsModule, SdrfEditorComponent],
   template: `
     <div class="app-container">
+      <header class="pride-masthead">
+        <div class="masthead-row">
+          <a class="pride-brand" href="https://www.ebi.ac.uk/pride/archive/" title="PRIDE Archive">
+            <img src="https://www.ebi.ac.uk/pride/logo/PRIDE_logo_Archive.png" alt="PRIDE" class="pride-brand-logo">
+            <span class="pride-brand-name">SDRF Editor</span>
+          </a>
+        </div>
+      </header>
       <main class="app-main">
         <sdrf-editor-table
           [url]="activeUrl"
@@ -28,10 +36,49 @@ import { SdrfEditorComponent } from './components/sdrf-editor/sdrf-editor.compon
     </div>
   `,
   styles: [`
+    /* Design tokens follow the PRIDE web application (PRIDE-Archive/pride-web):
+       teal primary #5bc0be, slate text #2f3644/#17233d, #f5f7f8 chrome. */
     .app-container {
       display: flex;
       flex-direction: column;
       height: 100vh;
+    }
+
+    .pride-masthead {
+      flex-shrink: 0;
+      background-color: #f5f7f8;
+      border-bottom: 1px solid #e3e6ea;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, .06);
+    }
+
+    .masthead-row {
+      max-width: 1600px;
+      margin: 0 auto;
+      padding: 10px 24px;
+      display: flex;
+      align-items: center;
+    }
+
+    .pride-brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 14px;
+      text-decoration: none;
+      color: #17233d;
+    }
+
+    .pride-brand-logo {
+      height: 36px;
+      width: auto;
+      display: block;
+    }
+
+    .pride-brand-name {
+      font-size: 18px;
+      font-weight: 600;
+      letter-spacing: -.01em;
+      padding-left: 14px;
+      border-left: 1px solid #dcdee2;
     }
 
     .app-main {
@@ -39,6 +86,7 @@ import { SdrfEditorComponent } from './components/sdrf-editor/sdrf-editor.compon
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      min-height: 0;
     }
 
     sdrf-editor-table {
