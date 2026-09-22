@@ -207,15 +207,23 @@ def test_next_step_hint_stops_at_the_last_page():
 # --------------------------------------------------------- evidence digests
 
 
+def test_pride_metadata_and_raw_files_are_separate_tools():
+    tools = {tool["declaration"]["name"]: tool for tool in registry.TOOLS}
+
+    assert "get_pride_metadata" in tools
+    assert "get_pride_raw_files" in tools
+    assert "get_pride_dataset" not in tools
+    assert "Does not fetch raw files" in tools["get_pride_metadata"]["declaration"]["description"]
+
+
 def test_pride_result_becomes_replayable_evidence():
     note = _evidence_note(
-        "get_pride_dataset",
+        "get_pride_metadata",
         {
             "accession": "PXD000547",
             "title": "TMT time course",
             "organisms": ["Homo sapiens (9606)"],
             "instruments": ["Q Exactive (MS:1001911)"],
-            "files": {"rawFileCount": 40, "rawFileNames": ["a.raw", "b.raw"]},
             "references": [{"pubmedId": "24006456"}],
         },
     )
@@ -224,12 +232,12 @@ def test_pride_result_becomes_replayable_evidence():
     key, text = note
     assert key == "pride:PXD000547"
     assert "Homo sapiens" in text
-    assert "40" in text
+    assert "raw files" not in text
     assert "PMID 24006456" in text
 
 
 def test_failed_tool_leaves_no_evidence():
-    assert _evidence_note("get_pride_dataset", {"error": "boom"}) is None
+    assert _evidence_note("get_pride_metadata", {"error": "boom"}) is None
     assert _evidence_note("find_publication", {"found": False}) is None
     assert _evidence_note("search_ontology", {"terms": []}) is None
 
@@ -247,7 +255,7 @@ def test_tool_summary_reads_as_a_sentence():
 
 
 def test_tool_error_is_flagged_for_attention():
-    summary, ok = registry.describe("get_pride_dataset", {"error": "404 Not Found\nsecond line"})
+    summary, ok = registry.describe("get_pride_metadata", {"error": "404 Not Found\nsecond line"})
     assert not ok
     assert summary == "Failed: 404 Not Found"
 
@@ -264,6 +272,13 @@ def test_every_tool_has_a_title_and_summarizer():
         name = tool["declaration"]["name"]
         assert tool.get("title"), f"{name} has no display title"
         assert callable(tool.get("summarize")), f"{name} has no summarizer"
+
+
+def test_document_list_title_covers_every_document_source():
+    tool = next(tool for tool in registry.TOOLS if tool["declaration"]["name"] == "list_documents")
+
+    assert tool["title"] == "Available documents"
+    assert "uploads, pasted text, and retrieved articles" in tool["declaration"]["description"]
 
 
 # ------------------------------------------------------------------ citations
@@ -289,13 +304,13 @@ def test_spec_search_results_become_citations():
 
 
 def test_failed_tool_result_yields_no_citations():
-    assert _citations_from_tool("get_pride_dataset", {"error": "boom"}) == []
-    assert _citations_from_tool("get_pride_dataset", "not json") == []
+    assert _citations_from_tool("get_pride_metadata", {"error": "boom"}) == []
+    assert _citations_from_tool("get_pride_metadata", "not json") == []
 
 
 def test_pride_result_becomes_citation():
     citations = _citations_from_tool(
-        "get_pride_dataset",
+        "get_pride_metadata",
         {"accession": "PXD000001", "title": "TMT spikes", "url": "https://example.org/PXD000001"},
     )
     assert citations[0].source == "pride"

@@ -39,7 +39,7 @@ FOCUS_RE = re.compile(r'Current focus: step \d+ of \d+, "[^"]+" \((\w[\w-]*)\)')
 DATASET_SETUP_SCRIPT: list[dict[str, Any]] = [
     {
         "text": "Let me pull the PRIDE record first.",
-        "tool_calls": [{"name": "get_pride_dataset", "arguments": {"accession": "PXD000001"}}],
+        "tool_calls": [{"name": "get_pride_metadata", "arguments": {"accession": "PXD000001"}}],
     },
     {
         "text": "Checking the sample-template term.",

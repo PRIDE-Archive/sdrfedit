@@ -1,8 +1,9 @@
 /**
  * Slash commands the wizard assistant understands.
  *
- * `/sdrf-annotate PXD000547` expands into a concrete annotation request and
- * tells the backend to load the matching skill instructions.
+ * Parsing here is for the UI chip and the structured `skill` / `skillArgs`
+ * fields. The raw `/sdrf-annotate PXD…` line is sent as the user message;
+ * the backend expands it and loads `sdrf_annotate.md`.
  */
 
 export interface SlashCommand {
@@ -11,8 +12,6 @@ export interface SlashCommand {
   accession: string | null;
   /** Text shown in the transcript chip. */
   label: string;
-  /** Prompt body sent to the model. */
-  prompt: string;
 }
 
 const SLASH_RE = /^\/(sdrf-annotate|sdrf:annotate)(?:\s+(.+))?\s*$/i;
@@ -30,18 +29,11 @@ export function parseSlashCommand(text: string): SlashCommand | null {
 
   if (name !== 'sdrf-annotate') return null;
 
-  const prompt = accession
-    ? `Run the sdrf-annotate skill for ${accession}. Fetch PRIDE metadata and the paper, then ` +
-      `propose wizard actions for the page I am on.`
-    : `Run the sdrf-annotate skill. Ask me for a ProteomeXchange accession if none was ` +
-      `provided, then annotate the current wizard page.`;
-
   return {
     name: 'sdrf-annotate',
     args,
     accession,
     label: accession ? `/sdrf-annotate ${accession}` : '/sdrf-annotate',
-    prompt,
   };
 }
 

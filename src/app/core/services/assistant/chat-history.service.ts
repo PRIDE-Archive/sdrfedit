@@ -198,9 +198,9 @@ function compactMessages(messages: AssistantChatMessage[]): AssistantChatMessage
 export function migrateTimeline(message: AssistantChatMessage): AssistantTimelineItem[] {
   if (Array.isArray(message.timeline) && message.timeline.length) {
     return message.timeline
-      .filter((item): item is AssistantTimelineItem => item.kind === 'tool' || item.kind === 'text')
+      .filter((item): item is AssistantTimelineItem => item.kind === 'tool' || item.kind === 'text' || item.kind === 'thinking')
       .map(item =>
-        item.kind === 'tool'
+        item.kind === 'thinking' ? item : item.kind === 'tool'
           ? { kind: 'tool', id: item.id || item.call.id, call: item.call }
           : { kind: 'text', id: item.id || 'text_legacy', content: item.content }
       );

@@ -11,7 +11,7 @@
     "build:examples-index": "node scripts/build-sdrf-index.js",
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
-    "test:wizard": "node --test src/app/core/utils/wizard-navigation.spec.ts src/app/components/sdrf-wizard/wizard-mobile-layout.spec.ts"
+    "test:wizard": "node --test src/app/core/utils/runs-files.spec.ts src/app/core/utils/factors.spec.ts src/app/core/utils/mass-tolerance.spec.ts src/app/core/utils/wizard-navigation.spec.ts src/app/components/sdrf-wizard/wizard-mobile-layout.spec.ts"
   },
   "dependencies": {
     "@angular/animations": "^20.3.16",

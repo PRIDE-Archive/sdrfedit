@@ -107,7 +107,7 @@ function suggestionToTerm(s: OntologySuggestion): OntologyTerm {
           <span class="warning-icon">!</span>
           <div>
             Add at least one candidate for each required characteristic, and define
-            at least one study factor with candidate values.
+            supported study factors, or explicitly record why no study factors are being encoded.
           </div>
         </div>
       }

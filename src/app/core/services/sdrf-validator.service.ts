@@ -10,6 +10,7 @@
  * Based on SDRF-Proteomics specification v1.1.0
  */
 
+import { equivalentFactorValue } from '../utils/factor-values';
 import { SdrfTable } from '../models/sdrf-table';
 import { SdrfColumn, getValueForSample } from '../models/sdrf-column';
 import { getRequiredSdrfColumns, getSdrfColumnConfig } from '../models/sdrf-config';
@@ -579,33 +580,24 @@ export class SdrfValidatorService {
       const factorValues = this.getAllValuesForColumn(factorCol, table.sampleCount);
       const charValues = this.getAllValuesForColumn(correspondingChar, table.sampleCount);
 
-      // Get unique characteristic values (normalize for comparison)
-      const charValueSet = new Set(
-        charValues
-          .filter((v) => v && v.toLowerCase() !== 'not available' && v.toLowerCase() !== 'not applicable')
-          .map((v) => v.toLowerCase().trim())
-      );
-
-      // Check each factor value exists in characteristics
-      const reportedMismatches = new Set<string>();
+      // Compare corresponding rows; set membership misses swapped sample groups.
       for (let sampleIdx = 0; sampleIdx < factorValues.length; sampleIdx++) {
         const factorValue = factorValues[sampleIdx];
         if (!factorValue || factorValue.toLowerCase() === 'not available' || factorValue.toLowerCase() === 'not applicable') {
           continue;
         }
 
-        const normalizedFactor = factorValue.toLowerCase().trim();
-        if (!charValueSet.has(normalizedFactor) && !reportedMismatches.has(normalizedFactor)) {
-          reportedMismatches.add(normalizedFactor);
+        const characteristicValue = charValues[sampleIdx] || '';
+        if (!equivalentFactorValue(factorValue, characteristicValue)) {
           errors.push(
             createValidationWarning(
               'FACTOR_CHARACTERISTIC_MISMATCH',
-              `Factor value '${factorValue}' in '${factorCol.name}' not found in '${correspondingChar.name}'`,
+              `Factor value '${factorValue}' differs from '${characteristicValue}' in '${correspondingChar.name}' on the same row`,
               {
                 column: factorCol.name,
                 value: factorValue,
                 row: sampleIdx + 1,
-                suggestion: `Ensure '${factorValue}' is present in 'characteristics[${factorName}]'`,
+                suggestion: `Check this sample's group assignment; independently defined groups may intentionally differ.`,
               }
             )
           );

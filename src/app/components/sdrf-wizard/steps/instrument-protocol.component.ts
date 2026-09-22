@@ -4,6 +4,8 @@
  * Instrument selection, cleavage agent, and modifications with UNIMOD search.
  */
 
+import { isValidMassTolerance } from '../../../core/utils/mass-tolerance';
+
 import {
   Component,
   Input,
@@ -155,6 +157,34 @@ import { unimodService, UnimodEntry } from '../../../core/services/unimod.servic
           </button>
         </div>
       }
+
+      <div class="form-section">
+        <h4>Mass tolerances (recommended)</h4>
+        <p class="help-text">Enter the database search settings as a number with ppm, Da, or mmu.
+          Leave blank to omit, or enter “not available” if unknown. These values apply to all data files.</p>
+        <label class="form-label" for="precursor-mass-tolerance">Precursor mass tolerance</label>
+        <input id="precursor-mass-tolerance" class="form-input" type="text"
+          placeholder="e.g. 10 ppm" aria-describedby="precursor-tolerance-help"
+          [ngModel]="state().precursorMassTolerance"
+          (ngModelChange)="wizardState.setPrecursorMassTolerance($event)"
+          [attr.aria-invalid]="!isValidMassTolerance(state().precursorMassTolerance)" />
+        <p id="precursor-tolerance-help" class="help-text">
+          @if (!isValidMassTolerance(state().precursorMassTolerance)) {
+            Enter a positive number with ppm, Da, or mmu, or not available.
+          }
+        </p>
+        <label class="form-label" for="fragment-mass-tolerance">Fragment mass tolerance</label>
+        <input id="fragment-mass-tolerance" class="form-input" type="text"
+          placeholder="e.g. 0.02 Da" aria-describedby="fragment-tolerance-help"
+          [ngModel]="state().fragmentMassTolerance"
+          (ngModelChange)="wizardState.setFragmentMassTolerance($event)"
+          [attr.aria-invalid]="!isValidMassTolerance(state().fragmentMassTolerance)" />
+        <p id="fragment-tolerance-help" class="help-text">
+          @if (!isValidMassTolerance(state().fragmentMassTolerance)) {
+            Enter a positive number with ppm, Da, or mmu, or not available.
+          }
+        </p>
+      </div>
 
       <!-- Modifications -->
       <div class="form-section">
@@ -322,7 +352,7 @@ import { unimodService, UnimodEntry } from '../../../core/services/unimod.servic
       @if (!wizardState.isStep5Valid()) {
         <div class="validation-message">
           <span class="warning-icon">!</span>
-          Please select an instrument and cleavage agent to continue.
+          Please select an instrument and cleavage agent, and correct any invalid mass tolerances to continue.
         </div>
       }
     </div>
@@ -887,6 +917,7 @@ export class InstrumentProtocolComponent {
     return [...new Set(names)].join(' · ');
   });
 
+  readonly isValidMassTolerance = isValidMassTolerance;
   readonly cleavageAgents = COMMON_CLEAVAGE_AGENTS;
   readonly positions = MODIFICATION_POSITIONS;
   readonly aminoAcids = AMINO_ACIDS;

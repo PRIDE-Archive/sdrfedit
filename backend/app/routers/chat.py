@@ -22,7 +22,7 @@ def _sse(event: dict) -> str:
 async def chat(request: ChatRequest) -> StreamingResponse:
     """Stream the assistant turn as server-sent events.
 
-    Event types: `status`, `token`, `tool_start`, `tool`, `actions`, `citations`,
+    Event types: `status`, `thinking`, `token`, `tool_start`, `tool`, `actions`, `citations`,
     `next_step`, `error`, `done`.
     """
 

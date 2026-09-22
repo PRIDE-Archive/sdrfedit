@@ -76,6 +76,7 @@ export interface AssistantNextStep {
  * tool/text block in the tracked list (that was hiding results in the UI).
  */
 export type AssistantTimelineItem =
+  | { kind: 'thinking'; id: string; content: string; reasoning?: string; startedAt: number; finishedAt?: number }
   | { kind: 'tool'; id: string; call: AssistantToolCall }
   | { kind: 'text'; id: string; content: string };
 
@@ -111,7 +112,7 @@ export interface AssistantChatMessage {
   focusStep?: AssistantStepId;
   /** Live progress line for the tool currently running. */
   status?: string;
-  /** Streamed blocks in arrival order (tools and text). */
+  /** Streamed blocks in arrival order (thinking, tools and text). */
   timeline?: AssistantTimelineItem[];
   /** Mirror of tool blocks; kept for older localStorage sessions. */
   toolCalls?: AssistantToolCall[];
@@ -174,7 +175,7 @@ export interface WizardSnapshot {
   labelConfigId: string | null;
   msRunCount: number;
   /** Run name + bound sample source names (for file↔run matching). */
-  msRunSummaries?: { name: string; sampleSourceNames: string[] }[];
+  msRunSummaries?: { name: string; sampleSourceNames: string[]; factorValues?: Record<string, string>; labelConfigId?: string; channels?: {label: string; sourceName?: string; role: string}[]; files?: {fileName: string; fractionId: number; technicalReplicate: number}[] }[];
   dataFileCount: number;
   /** All current raw file names in wizard order. */
   dataFileNames?: string[];
@@ -187,10 +188,14 @@ export interface WizardSnapshot {
   instrument: string | null;
   cleavageAgent: string | null;
   modifications: string[];
+  precursorMassTolerance: string;
+  fragmentMassTolerance: string;
   /** Enabled factor names (short view). */
   factors: string[];
   /** Factor definitions with Step-2 candidate values. */
-  factorDefinitions?: { name: string; values: string[] }[];
+  factorDefinitions?: { name: string; values: string[]; sourceCharacteristic?: string; reasoning?: string; scope?: 'sample' | 'run' }[];
+  factorDecision?: 'pending' | 'none';
+  noFactorReason?: string;
   /** Factors with 2+ candidates needing per-sample picks on Step 3. */
   multiValueFactorColumns?: string[];
   acquisitionMethod: string | null;
@@ -212,6 +217,7 @@ export interface AssistantChatRequest {
 
 /** Events streamed from `POST /api/chat`. */
 export type AssistantStreamEvent =
+  | { type: 'thinking'; text: string }
   | { type: 'status'; text: string }
   | { type: 'token'; text: string }
   | { type: 'tool_start'; tool: AssistantToolCall }

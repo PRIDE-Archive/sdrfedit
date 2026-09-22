@@ -1,93 +1,42 @@
 /**
  * One tool invocation as a collapsible block in the chat timeline.
  *
- * While running: spinner + title + "Running…".
- * When done: title + one-line summary; click to expand args + JSON.
+ * Shimmering raw tool name while running; click to expand summary, args and JSON.
  */
 
 import { ChangeDetectionStrategy, Component, computed, input, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { ActivityDisclosureComponent } from './activity-disclosure.component';
 
 import { AssistantToolCall } from '../../core/models/assistant';
-
-type ToolKind = 'data' | 'paper' | 'spec' | 'ontology' | 'template';
-
-const TOOL_KINDS: Record<string, ToolKind> = {
-  get_pride_dataset: 'data',
-  get_pride_raw_files: 'data',
-  find_publication: 'paper',
-  get_publication_full_text: 'paper',
-  check_pdf_url: 'paper',
-  parse_pdf_url: 'paper',
-  list_documents: 'paper',
-  read_document: 'paper',
-  search_specification: 'spec',
-  search_ontology: 'ontology',
-  verify_ontology_term: 'ontology',
-  search_cell_line: 'ontology',
-  verify_cellosaurus_accession: 'ontology',
-  list_sdrf_templates: 'template',
-  get_template_columns: 'template',
-  validate_template_combination: 'template',
-};
-
-const KIND_MONOGRAMS: Record<ToolKind, string> = {
-  data: 'DB',
-  paper: 'DOC',
-  spec: 'SPEC',
-  ontology: 'OLS',
-  template: 'TPL',
-};
 
 @Component({
   selector: 'assistant-tool-block',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, ActivityDisclosureComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div
-      class="block"
-      [class.failed]="!call().ok && !running()"
-      [class.running]="running()"
-      [class.open]="open()"
-    >
-      <button
-        class="head"
-        (click)="toggle()"
-        [attr.aria-expanded]="open()"
-      >
-        <span class="caret" [class.open]="open()">&#9656;</span>
-        @if (running()) {
-          <span class="spinner" aria-hidden="true"></span>
-        } @else {
-          <span class="mono" [class]="kind()">{{ monogram() }}</span>
-        }
-        <span class="text">
-          <span class="title">
-            {{ call().title }}
-            @if (!running() && call().durationMs) {
-              <span class="time">{{ duration() }}</span>
-            }
-            <span class="hint">{{ open() ? 'Collapse' : 'View details' }}</span>
-          </span>
-          <span class="summary">{{ call().summary || (running() ? 'Running…' : '') }}</span>
-        </span>
-      </button>
-
-      @if (open()) {
+    <assistant-activity [title]="call().name" [active]="running()"
+      [failed]="!call().ok && !running()"
+      [meta]="!running() && call().durationMs ? duration() : ''">
         <div class="body">
-          <div class="meta">
-            <code class="name">{{ call().name }}</code>
-            @if (call().argsPreview) {
-              <code class="args">{{ call().argsPreview }}</code>
-            }
-            @if (call().resultJson) {
-              <button class="copy" (click)="copy($event)">
-                {{ copied() ? 'Copied' : 'Copy JSON' }}
+          @if (call().summary) { <p class="summary">{{ call().summary }}</p> }
+          @if (formattedArgs()) {
+            <div class="section-head">
+              <span>Arguments</span>
+              <button class="copy" (click)="copy($event, 'args')">
+                {{ copied() === 'args' ? 'Copied' : 'Copy' }}
               </button>
-            }
-          </div>
+            </div>
+            <pre class="json">{{ formattedArgs() }}</pre>
+          }
           @if (call().resultJson) {
+            <div class="section-head">
+              <span>Result</span>
+              <button class="copy" (click)="copy($event, 'result')">
+                {{ copied() === 'result' ? 'Copied' : 'Copy JSON' }}
+              </button>
+            </div>
             <pre class="json">{{ call().resultJson }}</pre>
           } @else if (running()) {
             <p class="empty">The tool is still running; the result will appear here once it finishes.</p>
@@ -95,93 +44,9 @@ const KIND_MONOGRAMS: Record<ToolKind, string> = {
             <p class="empty">This tool did not return any result content.</p>
           }
         </div>
-      }
-    </div>
+    </assistant-activity>
   `,
   styles: [`
-    .block {
-      border: 1px solid #e6e8ef;
-      border-radius: 9px;
-      background: #fbfcfe;
-      overflow: hidden;
-    }
-    .block.failed { border-color: #fecaca; background: #fffafa; }
-    .block.running { border-color: #c7d2fe; background: #f8f9ff; }
-
-    .head {
-      display: flex;
-      align-items: flex-start;
-      gap: 8px;
-      width: 100%;
-      padding: 8px 10px;
-      background: none;
-      border: none;
-      cursor: pointer;
-      font: inherit;
-      text-align: left;
-    }
-    .head:hover:not(:disabled) { background: #f4f6fb; }
-    .head:disabled { cursor: wait; }
-
-    .caret {
-      flex-shrink: 0;
-      margin-top: 3px;
-      font-size: 10px;
-      color: #9ca3af;
-      transition: transform 0.15s ease;
-    }
-    .caret.open { transform: rotate(90deg); }
-    .caret.hidden { visibility: hidden; }
-
-    .spinner {
-      flex-shrink: 0;
-      width: 16px;
-      height: 16px;
-      margin-top: 2px;
-      border: 2px solid #c7d2fe;
-      border-top-color: #4f46e5;
-      border-radius: 50%;
-      animation: spin 0.7s linear infinite;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    .mono {
-      flex-shrink: 0;
-      min-width: 34px;
-      text-align: center;
-      padding: 2px 4px;
-      border-radius: 5px;
-      font-size: 9.5px;
-      font-weight: 700;
-      letter-spacing: 0.03em;
-      line-height: 1.5;
-    }
-    .mono.data { background: #e0f2fe; color: #0369a1; }
-    .mono.paper { background: #ede9fe; color: #6d28d9; }
-    .mono.spec { background: #dcfce7; color: #15803d; }
-    .mono.ontology { background: #fef3c7; color: #b45309; }
-    .mono.template { background: #f1f5f9; color: #475569; }
-    .failed .mono { background: #fee2e2; color: #b91c1c; }
-
-    .text { flex: 1; min-width: 0; }
-
-    .title {
-      display: flex;
-      align-items: baseline;
-      flex-wrap: wrap;
-      gap: 6px;
-      font-weight: 600;
-      color: #374151;
-      font-size: 12px;
-    }
-    .time { font-weight: 400; color: #b0b6c1; font-size: 10.5px; }
-    .hint {
-      margin-left: auto;
-      font-weight: 500;
-      font-size: 10.5px;
-      color: #6366f1;
-    }
-
     .summary {
       display: block;
       margin-top: 2px;
@@ -191,30 +56,21 @@ const KIND_MONOGRAMS: Record<ToolKind, string> = {
       white-space: pre-wrap;
       word-break: break-word;
     }
-    .running .summary { color: #4338ca; }
-    .failed .summary { color: #b91c1c; }
 
-    .body { padding: 0 10px 10px 52px; }
+    .body { min-width: 0; padding: 0 4px 0 0; }
 
-    .meta {
+    .section-head {
       display: flex;
       align-items: center;
-      flex-wrap: wrap;
-      gap: 6px;
-      margin-bottom: 6px;
-    }
-
-    .name, .args {
-      background: #eef1f6;
-      color: #4b5563;
-      border-radius: 4px;
-      padding: 1px 5px;
+      gap: 8px;
+      margin: 8px 0 4px;
+      color: #6b7280;
       font-size: 10.5px;
-      max-width: 100%;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
     }
+    .section-head:first-of-type { margin-top: 0; }
 
     .copy {
       margin-left: auto;
@@ -224,6 +80,9 @@ const KIND_MONOGRAMS: Record<ToolKind, string> = {
       border-radius: 5px;
       padding: 2px 7px;
       font-size: 10.5px;
+      text-transform: none;
+      letter-spacing: 0;
+      font-weight: 500;
       cursor: pointer;
     }
     .copy:hover { background: #f4f6fb; }
@@ -252,32 +111,37 @@ const KIND_MONOGRAMS: Record<ToolKind, string> = {
 export class ToolCallBlockComponent {
   readonly call = input.required<AssistantToolCall>();
 
-  private readonly _open = signal(false);
-  private readonly _copied = signal(false);
+  private readonly _copied = signal<'args' | 'result' | null>(null);
 
-  readonly open = this._open.asReadonly();
   readonly copied = this._copied.asReadonly();
   readonly running = computed(() => !!this.call().running);
+  readonly formattedArgs = computed(() => prettyJson(this.call().argsPreview));
 
-  readonly kind = computed<ToolKind>(() => TOOL_KINDS[this.call().name] || 'template');
-  readonly monogram = computed(() => KIND_MONOGRAMS[this.kind()]);
   readonly duration = computed(() => {
     const ms = this.call().durationMs;
     return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`;
   });
 
-  toggle(): void {
-    this._open.update(value => !value);
-  }
-
-  async copy(event: Event): Promise<void> {
+  async copy(event: Event, which: 'args' | 'result'): Promise<void> {
     event.stopPropagation();
+    const text = which === 'args' ? this.formattedArgs() : this.call().resultJson;
+    if (!text) return;
     try {
-      await navigator.clipboard.writeText(this.call().resultJson);
-      this._copied.set(true);
-      setTimeout(() => this._copied.set(false), 1500);
+      await navigator.clipboard.writeText(text);
+      this._copied.set(which);
+      setTimeout(() => this._copied.set(null), 1500);
     } catch {
       // Clipboard can be denied; the <pre> is still selectable.
     }
+  }
+}
+
+function prettyJson(raw: string | undefined): string {
+  const text = (raw || '').trim();
+  if (!text) return '';
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
   }
 }

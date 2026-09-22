@@ -1,9 +1,9 @@
-"""PRIDE Archive lookups: project metadata plus raw/acquisition file names.
+"""PRIDE Archive lookups for project metadata and raw/acquisition files.
 
-The frontend already fetches raw file names directly
-(src/app/core/services/pride-archive.service.ts); this module additionally
-returns the project-level metadata and publication references the assistant
-needs to draft an annotation.
+The two concerns deliberately have separate functions so the assistant can
+inspect project-level metadata without also downloading and returning a large
+file listing. The frontend also fetches raw file names directly in
+``src/app/core/services/pride-archive.service.ts``.
 """
 
 from __future__ import annotations
@@ -135,13 +135,3 @@ async def fetch_raw_files(accession: str, limit: int = 400) -> dict:
         "rawFileNames": raw_names[:limit],
         "truncated": len(raw_names) > limit,
     }
-
-
-async def fetch_dataset_overview(accession: str) -> dict:
-    """Project metadata plus raw files in one call (the usual first agent step)."""
-    project = await fetch_project(accession)
-    try:
-        files = await fetch_raw_files(accession)
-    except ToolHttpError as error:
-        files = {"accession": project["accession"], "rawFileCount": 0, "rawFileNames": [], "error": str(error)}
-    return {**project, "files": files}

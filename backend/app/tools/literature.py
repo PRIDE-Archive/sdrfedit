@@ -1,17 +1,14 @@
-"""Europe PMC literature lookup and JATS full-text extraction.
-
-Mirrors the approach of bigbio/sdrf-skills `scripts/europepmc_fulltext.py`:
-resolve a PMID/DOI to a record, pull the JATS full text when Europe PMC hosts
-it, and convert the noisy XML into clean per-section text. When the article is
-not open access the caller is told which PDF URLs exist so it can either
-download one or ask the user to upload the paper.
-"""
+"""Resolve article identifiers, discover open copies, and extract JATS evidence."""
 
 from __future__ import annotations
 
+import hashlib
 import re
+from urllib.parse import quote
 
-from .http import ToolHttpError, get_json, get_text
+from ..config import get_settings
+
+from .http import ToolHttpError, get_json
 
 EPMC_BASE = "https://www.ebi.ac.uk/europepmc/webservices/rest"
 
@@ -36,7 +33,7 @@ SECTION_ALIASES = {
 PRIORITY_SECTIONS = ("methods", "results", "abstract", "introduction", "discussion", "conclusion")
 MAX_SECTION_CHARS = 20000
 
-# Front/back matter that never contains sample metadata.
+# Sections omitted from narrative extraction; tables and attachment references are kept separately.
 SKIP_SECTIONS = {
     "references", "acknowledgements", "acknowledgments", "footnotes",
     "conflicts of interest", "conflict of interest", "competing interests",
@@ -58,109 +55,115 @@ def _normalize_section(title: str) -> str:
     return lowered or "other"
 
 
+def normalize_doi(value: str | None) -> str:
+    return re.sub(r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)", "", (value or "").strip(), flags=re.I).lower()
+
+
 async def lookup_publication(pmid: str | None = None, doi: str | None = None, title: str | None = None) -> dict:
-    """Resolve an article and report how its full text can be obtained."""
+    """Resolve identifiers in order, then discover downloadable open copies."""
+    doi = normalize_doi(doi)
+    pmid = str(pmid or "").strip()
+    if pmid and not pmid.isdigit():
+        raise ToolHttpError("PMID must contain digits only.")
+    queries = []
     if pmid:
-        query = f"EXT_ID:{re.sub(r'[^0-9]', '', str(pmid))}"
-    elif doi:
-        query = f'DOI:"{doi.strip()}"'
-    elif title:
-        query = f'TITLE:"{_clean(title)}"'
-    else:
+        queries.append(f"EXT_ID:{pmid} AND SRC:MED")
+    if doi:
+        queries.append(f'DOI:"{doi}"')
+    if not queries and title:
+        queries.append(f'TITLE:"{_clean(title)}"')
+    if not queries:
         raise ToolHttpError("Provide a pmid, doi, or title to look up a publication.")
+    record = {}
+    warnings = []
+    for query in queries:
+        try:
+            payload = await get_json(f"{EPMC_BASE}/search", params={
+                "query": query, "format": "json", "resultType": "core", "pageSize": 2,
+            })
+        except ToolHttpError as error:
+            warnings.append(str(error))
+            continue
+        results = payload.get("resultList", {}).get("result", [])
+        if results:
+            record = results[0]
+            actual_pmid = str(record.get("pmid") or (record.get("id") if record.get("source") == "MED" else "") or "")
+            actual_doi = normalize_doi(record.get("doi"))
+            if ((pmid and actual_pmid and pmid != actual_pmid)
+                    or (doi and actual_doi and doi != actual_doi)):
+                return {"found": False, "status": "identifier_conflict", "query": query,
+                        "nextStep": "Ask the user to resolve the PMID/DOI conflict before downloading."}
+            if not pmid and not doi:
+                return {"found": False, "status": "needs_confirmation", "candidates": results,
+                        "nextStep": "Confirm the title match and identifiers before downloading."}
+            break
 
-    payload = await get_json(
-        f"{EPMC_BASE}/search",
-        params={"query": query, "format": "json", "resultType": "core", "pageSize": 1},
-    )
-    results = payload.get("resultList", {}).get("result", [])
-    if not results:
-        return {
-            "found": False,
-            "query": query,
-            "message": "No Europe PMC record matched this identifier.",
-            "nextStep": (
-                "Call list_documents; if empty, ask the user to upload the paper PDF "
-                "through the panel's paperclip button, and tell them that if they do "
-                "not upload one you will continue annotating from PRIDE metadata alone "
-                "— then stop without proposing templates yet."
-            ),
-        }
-
-    record = results[0]
-    pdf_urls: list[str] = []
+    candidates = []
     for entry in (record.get("fullTextUrlList") or {}).get("fullTextUrl", []):
-        if entry.get("documentStyle") == "pdf" and entry.get("url"):
-            pdf_urls.append(entry["url"])
-
+        if entry.get("documentStyle") == "pdf" and entry.get("availabilityCode") in {"OA", "F"} and entry.get("url"):
+            candidates.append({"url": entry["url"], "source": "europepmc"})
+    resolved_doi = normalize_doi(record.get("doi")) or doi
+    email = get_settings().unpaywall_email
+    if resolved_doi and email:
+        try:
+            oa = await get_json(f"https://api.unpaywall.org/v2/{quote(resolved_doi, safe='')}", params={"email": email})
+            for location in [oa.get("best_oa_location"), *(oa.get("oa_locations") or [])]:
+                if location and location.get("url_for_pdf"):
+                    candidates.append({"url": location["url_for_pdf"], "source": "unpaywall",
+                                       "license": location.get("license"), "version": location.get("version")})
+        except ToolHttpError as error:
+            warnings.append(f"Unpaywall: {error}")
+    elif resolved_doi:
+        warnings.append("Unpaywall disabled: configure UNPAYWALL_EMAIL to discover additional open PDFs.")
+    candidates = list({c["url"]: c for c in candidates if c["url"].startswith(("https://", "http://"))}.values())
     pmcid = record.get("pmcid")
-    is_open_access = record.get("isOpenAccess") == "Y"
-    # inEPMC=Y only guarantees the abstract; the JATS endpoint needs the OA subset.
-    open_full_text = bool(pmcid) and is_open_access
-
+    open_full_text = bool(pmcid) and record.get("isOpenAccess") == "Y"
     return {
-        "found": True,
-        "pmid": record.get("pmid"),
-        "pmcid": pmcid,
-        "doi": record.get("doi"),
-        "title": _clean(record.get("title")),
+        "found": bool(record or candidates),
+        "status": "full_text_available" if open_full_text or candidates else ("abstract_only" if record.get("abstractText") else "unavailable"),
+        "pmid": record.get("pmid") or (record.get("id") if record.get("source") == "MED" else pmid),
+        "pmcid": pmcid, "doi": resolved_doi, "title": _clean(record.get("title")),
         "journal": ((record.get("journalInfo") or {}).get("journal") or {}).get("title"),
-        "year": record.get("pubYear"),
-        "isOpenAccess": is_open_access,
-        "fullTextAvailable": open_full_text,
-        "abstract": _clean(record.get("abstractText"))[:4000],
-        "pdfUrls": pdf_urls[:5],
-        "url": f"https://europepmc.org/article/{record.get('source', 'MED')}/{record.get('id')}",
-        "nextStep": _next_step(open_full_text, bool(pmcid), bool(pdf_urls)),
+        "year": record.get("pubYear"), "isOpenAccess": record.get("isOpenAccess") == "Y",
+        "fullTextAvailable": open_full_text, "abstract": _clean(record.get("abstractText"))[:4000],
+        "pdfUrls": [c["url"] for c in candidates], "pdfCandidates": candidates, "warnings": warnings,
+        "url": f"https://doi.org/{resolved_doi}" if resolved_doi else f"https://europepmc.org/article/MED/{pmid}",
+        "nextStep": _next_step(open_full_text, bool(pmcid), bool(candidates)),
     }
 
 
 def _next_step(open_full_text: bool, has_pmcid: bool, has_pdf: bool) -> str:
-    # Prefer a MinerU-parsed session document so later steps can call read_document.
-    if has_pdf:
-        return (
-            "PDF link(s) are available in pdfUrls. Call check_pdf_url on one URL, then "
-            "parse_pdf_url to download and MinerU-parse it into the session. Then call "
-            "read_document with that documentId (methods/results). Do NOT use "
-            "get_publication_full_text as the primary paper source — OA XML is not a "
-            "session document and later read_document calls will fail."
-        )
     if open_full_text:
-        return (
-            "Open full text exists in Europe PMC but no pdfUrls were returned. "
-            "Call list_documents; if empty, ask the user to upload the paper PDF via "
-            "the panel paperclip (required for MinerU session documents), then STOP "
-            "without proposing templates. Do not rely on get_publication_full_text alone."
-        )
-    if has_pmcid:
-        return (
-            "The article is in Europe PMC but outside the open-access subset / no PDF "
-            "URL. Call list_documents; if empty, ask the user to upload the paper PDF "
-            "through the panel's paperclip button and stop — do not propose templates yet."
-        )
-    return (
-        "No open full text and no PDF URL available. "
-        "Call list_documents; if empty, ask the user to upload the "
-        "paper PDF through the panel's paperclip button and stop — do not propose "
-        "templates yet."
-    )
+        return ("Call get_publication_full_text first: it stores XML as a session document. "
+                "Then read_document using its documentId. If XML fails, try each pdfUrls with "
+                "parse_pdf_url before offering upload.")
+    if has_pdf:
+        return ("Call parse_pdf_url for the open pdfUrls candidates in order until one succeeds, "
+                "then read_document. check_pdf_url is optional. Offer upload only after all candidates fail.")
+    return ("Call list_documents and reuse the matching paper if present. Otherwise ask the user to "
+            "upload the paper and stop before proposing templates. If they continue without upload, "
+            "use PRIDE metadata and label any abstract as abstract-only evidence.")
 
 
 async def fetch_full_text(pmcid: str, sections: list[str] | None = None) -> dict:
     """Fetch and clean the Europe PMC JATS full text for a PMC article."""
     normalized = pmcid.strip().upper()
-    if not normalized.startswith("PMC"):
-        normalized = f"PMC{re.sub(r'[^0-9]', '', normalized)}"
+    if normalized.isdigit():
+        normalized = f"PMC{normalized}"
+    if not re.fullmatch(r"PMC[0-9]+", normalized):
+        raise ToolHttpError("Invalid PMCID.")
+
+    from .publication_cache import cached_download
 
     try:
-        xml = await get_text(f"{EPMC_BASE}/{normalized}/fullTextXML", timeout=60.0)
+        raw, raw_path = await cached_download(f"{EPMC_BASE}/{normalized}/fullTextXML", "xml")
     except ToolHttpError as error:
         raise ToolHttpError(
-            f"Europe PMC has no open full text for {normalized} ({error}). "
-            "Ask the user to upload the paper PDF instead."
+            f"Could not retrieve Europe PMC full text for {normalized} ({error}). "
+            "Try the publication PDF candidates before offering upload."
         ) from error
 
-    parsed = parse_jats(xml)
+    parsed = parse_jats(raw)
     wanted = [s.lower() for s in sections] if sections else None
     selected = {
         name: text for name, text in parsed["sections"].items() if not wanted or name in wanted
@@ -169,6 +172,13 @@ async def fetch_full_text(pmcid: str, sections: list[str] | None = None) -> dict
         selected = parsed["sections"]
 
     return {
+        "rawPath": raw_path,
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "identifiers": parsed["identifiers"],
+        "license": parsed["license"],
+        "allSections": parsed["sections"],
+        "tables": parsed["tables"],
+        "supplementaryFiles": parsed["supplementaryFiles"],
         "pmcid": normalized,
         "title": parsed["title"],
         "sections": {name: text[:MAX_SECTION_CHARS] for name, text in selected.items()},
@@ -177,11 +187,24 @@ async def fetch_full_text(pmcid: str, sections: list[str] | None = None) -> dict
     }
 
 
-def parse_jats(xml: str) -> dict:
+def parse_jats(xml: str | bytes) -> dict:
     """Convert JATS XML into `{title, sections: {name: text}}`."""
     from bs4 import BeautifulSoup
 
     soup = BeautifulSoup(xml, "lxml-xml")
+
+    if soup.find("article") is None or soup.find("body") is None:
+        raise ToolHttpError("Response is not full-text JATS XML.")
+    tables = [{"id": t.get("id"), "text": _clean(t.get_text(" ")),
+               "rows": [[_clean(c.get_text(" ")) for c in row.find_all(["th", "td"])]
+                        for row in t.find_all("tr")]} for t in soup.find_all("table-wrap")]
+    supplements = []
+    for item in soup.find_all("supplementary-material"):
+        for link in [item, *item.find_all(["media", "ext-link"])]:
+            href = link.get("xlink:href") or link.get("href")
+            if href:
+                supplements.append({"href": href, "label": _clean(item.get_text(" ")),
+                                    "downloaded": False})
 
     for tag in soup.find_all(["xref", "table-wrap", "fig", "graphic", "ref-list", "back"]):
         tag.decompose()
@@ -212,4 +235,13 @@ def parse_jats(xml: str) -> dict:
     merged = {name: "\n\n".join(parts) for name, parts in sections.items() if any(parts)}
     ordered = {name: merged[name] for name in PRIORITY_SECTIONS if name in merged}
     ordered.update({name: text for name, text in merged.items() if name not in ordered})
-    return {"title": title, "sections": ordered}
+    if tables:
+        ordered["tables"] = "\n\n".join(t["text"] + "\n" + "\n".join(" | ".join(row) for row in t["rows"]) for t in tables)
+    if not any(text.strip() for name, text in ordered.items() if name != "abstract"):
+        raise ToolHttpError("JATS response has no usable full-text body.")
+    if supplements:
+        ordered["supplementary references"] = "\n".join(f"{x['label']}: {x['href']}" for x in supplements)
+    identifiers = {t.get("pub-id-type"): _clean(t.get_text()) for t in soup.find_all("article-id")}
+    license_tag = soup.find("license")
+    return {"title": title, "sections": ordered, "tables": tables, "supplementaryFiles": supplements,
+            "identifiers": identifiers, "license": _clean(license_tag.get_text(" ")) if license_tag else None}

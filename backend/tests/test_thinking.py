@@ -1,6 +1,25 @@
 from app.llm.thinking import ThinkingSplitter
 
 
+def test_reasoning_is_available_separately_once_close_tag_is_confirmed():
+    splitter = ThinkingSplitter()
+    assert splitter.feed("<think>Check the metadata first.</th") == ""
+    assert splitter.take_reasoning() == ""
+    assert splitter.feed("ink>Here is the answer.") == "Here is the answer."
+    assert splitter.take_reasoning() == "Check the metadata first."
+    assert splitter.take_reasoning() == ""
+
+
+def test_implicit_reasoning_is_retained_and_direct_answer_is_not_mislabeled():
+    splitter = ThinkingSplitter()
+    splitter.feed("Inspect the file.</think>")
+    assert splitter.take_reasoning() == "Inspect the file."
+    direct = ThinkingSplitter()
+    direct.feed("Here is the answer.")
+    assert direct.flush() == "Here is the answer."
+    assert direct.take_reasoning() == ""
+
+
 def feed_all(splitter: ThinkingSplitter, chunks: list[str]) -> str:
     visible = [splitter.feed(chunk) for chunk in chunks]
     visible.append(splitter.flush())

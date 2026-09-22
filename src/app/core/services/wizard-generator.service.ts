@@ -4,11 +4,17 @@
  * Converts WizardState into an SdrfTable structure.
  */
 
+import { normalizeMassTolerance } from '../utils/mass-tolerance';
+
 import { Injectable, inject } from '@angular/core';
 import {
   WizardState,
+  assayNameForFile,
   WizardModification,
   WizardFactor,
+  factorCandidates,
+  resolveFactorValue,
+  resolveRunFactorValue,
   DynamicColumnDefault,
   WizardExpansionRow,
   WizardSampleEntry,
@@ -160,6 +166,15 @@ export class WizardGeneratorService {
       emitted.add(colDefault.columnName.toLowerCase());
     }
 
+    // Linked factor sources must be emitted even when they are optional characteristics.
+    for (const factor of state.factors.filter(f => f.enabled && f.sourceCharacteristic)) {
+      const source = factor.sourceCharacteristic!;
+      if (!emitted.has(source.toLowerCase())) {
+        table.columns.push(this.createDynamicCharacteristicColumn(state, source, columnPosition++));
+        emitted.add(source.toLowerCase());
+      }
+    }
+
     // Biological replicate
     table.columns.push(this.createBiologicalReplicateColumn(state, columnPosition++));
 
@@ -176,6 +191,19 @@ export class WizardGeneratorService {
     // Instrument & Protocol
     table.columns.push(this.createInstrumentColumn(state, columnPosition++));
     table.columns.push(this.createCleavageAgentColumn(state, columnPosition++));
+
+    // Recommended search parameters: omit unfilled columns, preserve explicit unknowns.
+    for (const [name, tolerance] of [
+      ['precursor mass tolerance', state.precursorMassTolerance],
+      ['fragment mass tolerance', state.fragmentMassTolerance],
+    ]) {
+      if (!tolerance?.trim()) continue;
+      table.columns.push({
+        name: `comment[${name}]`, type: 'comment',
+        value: normalizeMassTolerance(tolerance), modifiers: [],
+        columnPosition: columnPosition++, isRequired: false,
+      });
+    }
 
     // Modifications
     for (const mod of state.modifications) {
@@ -413,19 +441,7 @@ export class WizardGeneratorService {
   }
 
   private createAssayNameColumn(state: WizardState, position: number): SdrfColumn {
-    const { value, modifiers } = this.modsFromRows(row => {
-      const parts = [row.sourceName];
-      if (row.fractionId > 1 || this.expansionRows.some(r => r.fractionId > 1)) {
-        parts.push(`F${row.fractionId}`);
-      }
-      if (row.technicalReplicate > 1 || this.expansionRows.some(r => r.technicalReplicate > 1)) {
-        parts.push(`R${row.technicalReplicate}`);
-      }
-      if (row.label && row.label !== 'label free sample') {
-        parts.push(row.label.replace(/\s+/g, ''));
-      }
-      return parts.join('_');
-    });
+    const { value, modifiers } = this.modsFromRows(row => assayNameForFile(row.fileName));
     return {
       name: 'assay name',
       type: 'comment',
@@ -619,12 +635,13 @@ export class WizardGeneratorService {
     factor: WizardFactor,
     position: number
   ): SdrfColumn {
-    const name = `factor value[${factor.name.trim()}]`;
-    const candidates = factor.values || [];
-    const defaultValue = candidates[0] || 'not available';
+    const name = `factor value[${factor.name.trim().toLowerCase()}]`;
+    const candidates = factorCandidates(state, factor);
+    const defaultValue = candidates.length === 1 ? candidates[0] : 'not available';
     const modifiers = this.modsFromRows(row => {
+      if (factor.scope === 'run') return resolveRunFactorValue(state.msRuns.find(run => run.id === row.runId), factor) || 'not available';
       const sample = this.findSample(state, row.sampleIndex);
-      return sample?.factorValues?.[factor.name]?.trim() || defaultValue;
+      return sample ? resolveFactorValue(state, sample, factor) || 'not available' : 'not available';
     }, defaultValue).modifiers;
 
     return {

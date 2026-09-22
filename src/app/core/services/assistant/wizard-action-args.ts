@@ -13,6 +13,7 @@ import {
   WizardCleavageAgent,
   WizardFactor,
   WizardModification,
+  normalizeFactor,
 } from '../../models/wizard';
 
 export const ACQUISITION_METHODS = ['dda', 'dia', 'prm', 'srm'] as const;
@@ -234,11 +235,10 @@ export function asFactor(value: unknown): WizardFactor {
     values.push(record['defaultValue'].trim());
   }
 
-  return {
-    name,
-    enabled: record['enabled'] === undefined ? true : record['enabled'] !== false,
-    values,
-  };
+  if (record['scope'] !== undefined && record['scope'] !== 'sample' && record['scope'] !== 'run') {
+    throw new WizardActionError('Factor scope must be sample or run.');
+  }
+  return normalizeFactor({ ...record, name, values });
 }
 
 function asRecord(value: unknown, what: string): Record<string, unknown> {

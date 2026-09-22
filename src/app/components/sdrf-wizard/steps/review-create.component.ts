@@ -148,6 +148,14 @@ import {
             <span class="config-label">Enzyme:</span>
             <span class="config-value">{{ state().cleavageAgent?.name || 'Not set' }}</span>
           </div>
+          <div class="config-item">
+            <span class="config-label">Precursor mass tolerance:</span>
+            <span class="config-value">{{ state().precursorMassTolerance || 'Not provided' }}</span>
+          </div>
+          <div class="config-item">
+            <span class="config-label">Fragment mass tolerance:</span>
+            <span class="config-value">{{ state().fragmentMassTolerance || 'Not provided' }}</span>
+          </div>
         </div>
       </div>
 
@@ -676,8 +684,9 @@ export class ReviewCreateComponent {
 
   readonly factorSummary = computed(() => {
     const factors = this.state().factors.filter(f => f.enabled && f.name.trim());
-    if (factors.length === 0) return 'None';
-    return factors.map(f => `factor value[${f.name}]`).join(', ');
+    if (this.state().factorDecision === 'none') return `None (explicit): ${this.state().noFactorReason}`;
+    if (factors.length === 0) return 'Not yet confirmed';
+    return factors.map(f => `factor value[${f.name}] (${f.scope === 'run' ? 'MS run' : 'sample'})`).join(', ');
   });
 
   constructor() {

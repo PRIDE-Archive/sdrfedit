@@ -31,6 +31,7 @@ class StoredDocument:
     file_name: str
     origin: str
     document: ParsedDocument
+    metadata: dict = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
 
 
@@ -49,7 +50,7 @@ class SessionStore:
         self._evidence: dict[str, dict[str, EvidenceNote]] = {}
 
     def add_document(
-        self, session_id: str, file_name: str, document: ParsedDocument, origin: str = "upload"
+        self, session_id: str, file_name: str, document: ParsedDocument, origin: str = "upload", metadata: dict | None = None
     ) -> StoredDocument:
         self._evict()
         document_id = f"doc_{uuid.uuid4().hex[:10]}"
@@ -59,6 +60,7 @@ class SessionStore:
             file_name=file_name,
             origin=origin,
             document=document,
+            metadata=metadata or {},
         )
         self._documents[document_id] = stored
         return stored

@@ -177,19 +177,12 @@ def test_extract_markdown_from_zip_picks_the_largest_markdown():
         extract_markdown_from_zip(b"not a zip")
 
 
-def test_literature_next_step_with_pdf_urls_prefers_parse_pdf():
-    message = _next_step(True, True, True).lower()
-    assert "parse_pdf_url" in message
-    assert "check_pdf_url" in message
-    assert "get_publication_full_text" in message  # mentioned as what NOT to rely on
-    assert "primary" in message or "do not" in message
-
-
-def test_literature_next_step_oa_without_pdf_asks_upload():
-    message = _next_step(True, True, False).lower()
-    assert "list_documents" in message
-    assert "upload" in message
-    assert "parse_pdf_url" not in message or "pdfurls" in message
+def test_literature_next_step_prefers_xml_session_document():
+    for has_pdf in (True, False):
+        message = _next_step(True, True, has_pdf).lower()
+        assert "get_publication_full_text first" in message
+        assert "session document" in message
+        assert "read_document" in message
 
 
 def test_literature_next_step_non_oa_asks_upload_and_stop():

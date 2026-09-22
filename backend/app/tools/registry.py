@@ -8,26 +8,29 @@ JSON-serialisable result that is fed back to the model.
 from __future__ import annotations
 
 import json
+import hashlib
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from ..parsing.base import PdfParseError
+from ..parsing.base import ParsedDocument, PdfParseError
 from ..parsing.factory import get_pdf_parser
 from ..session import get_session_store
 from . import celllines, literature, ontology, pride, spec_search, templates
 from .http import ToolHttpError, get_bytes
+from .publication_cache import cached_download
 
 Handler = Callable[[dict[str, Any], str], Awaitable[Any]]
 
 MAX_RESULT_CHARS = 24000
+MAX_DOCUMENT_CHARS = 12000
 MAX_SUMMARY_CHARS = 240
 
 
 # --------------------------------------------------------------------- handlers
 
 
-async def _get_dataset(args: dict, _session: str) -> Any:
-    return await pride.fetch_dataset_overview(args["accession"])
+async def _get_metadata(args: dict, _session: str) -> Any:
+    return await pride.fetch_project(args["accession"])
 
 
 async def _get_raw_files(args: dict, _session: str) -> Any:
@@ -35,13 +38,65 @@ async def _get_raw_files(args: dict, _session: str) -> Any:
 
 
 async def _find_publication(args: dict, _session: str) -> Any:
-    return await literature.lookup_publication(
+    result = await literature.lookup_publication(
         pmid=args.get("pmid"), doi=args.get("doi"), title=args.get("title")
     )
+    # Discovery returns identifiers and acquisition routes, not article content
+    # or the upstream search response. Keep license/version for PDF acquisition.
+    fields = ("found", "status", "pmid", "pmcid", "doi", "title", "url", "fullTextAvailable")
+    compact = {key: result[key] for key in fields if result.get(key) is not None and result.get(key) != ""}
+    if result.get("pdfCandidates"):
+        compact["pdfCandidates"] = result["pdfCandidates"]
+    elif result.get("pdfUrls"):
+        compact["pdfCandidates"] = [{"url": url} for url in result["pdfUrls"]]
+    if result.get("candidates"):
+        compact["candidates"] = [
+            {key: value for key, value in {
+                "pmid": candidate.get("pmid") or (candidate.get("id") if candidate.get("source") == "MED" else None),
+                "pmcid": candidate.get("pmcid"), "doi": candidate.get("doi"),
+                "title": candidate.get("title"), "year": candidate.get("pubYear"),
+            }.items() if value}
+            for candidate in result["candidates"]
+        ]
+    if result.get("warnings"):
+        compact["warnings"] = result["warnings"]
+    if result.get("nextStep"):
+        compact["nextStep"] = result["nextStep"].replace("pdfUrls", "pdfCandidates")
+    return compact
 
 
-async def _get_full_text(args: dict, _session: str) -> Any:
-    return await literature.fetch_full_text(args["pmcid"], args.get("sections"))
+def _document_result(stored, cached=False) -> dict:
+    return {"ok": True, "status": "ready", "documentId": stored.document_id,
+            "cached": cached, "parser": stored.document.parser,
+            "fileName": stored.file_name, "url": stored.origin,
+            "pmcid": stored.metadata.get("pmcid"), "title": stored.metadata.get("title"),
+            "createdAt": stored.created_at,
+            "charCount": stored.document.char_count,
+            "availableSections": list(stored.document.sections), "metadata": stored.metadata,
+            "nextStep": "Call read_document with this documentId (methods/results/tables)."}
+
+
+async def _get_full_text(args: dict, session_id: str) -> Any:
+    pmcid = args["pmcid"].strip().upper()
+    if pmcid.isdigit():
+        pmcid = "PMC" + pmcid
+    store = get_session_store()
+    for stored in store.list_for_session(session_id):
+        if stored.metadata.get("pmcid") == pmcid:
+            return _document_result(stored, True)
+    try:
+        result = await literature.fetch_full_text(pmcid)
+    except ToolHttpError as error:
+        return {"ok": False, "status": "download_failed", "error": str(error),
+                "nextStep": "Try each open pdfUrls candidate with parse_pdf_url before offering upload."}
+    sections = result.pop("allSections")
+    document = ParsedDocument(markdown="\n\n".join(f"## {k}\n{v}" for k, v in sections.items()),
+                              sections=sections, parser="europepmc-jats")
+    stored = store.add_document(session_id, f"{pmcid}.xml", document, origin=result["url"],
+        metadata={"pmcid": pmcid, "title": result["title"], "source": "europepmc", "format": "xml", "rawPath": result["rawPath"],
+                  "sha256": result["sha256"], "identifiers": result["identifiers"],
+                  "license": result["license"], "supplementaryFiles": result["supplementaryFiles"]})
+    return _document_result(stored)
 
 
 async def _search_specification(args: dict, _session: str) -> Any:
@@ -87,35 +142,37 @@ async def _validate_templates(args: dict, _session: str) -> Any:
 
 async def _parse_pdf_url(args: dict, session_id: str) -> Any:
     url = args["url"]
-    parser = get_pdf_parser()
+    doi = literature.normalize_doi(args.get("doi"))
+    store = get_session_store()
+    for stored in store.list_for_session(session_id):
+        if stored.origin == url or (doi and stored.metadata.get("doi") == doi
+                                    and stored.metadata.get("version") == args.get("version")):
+            return _document_result(stored, True)
     try:
-        document = await parser.parse_url(url)
+        data, path = await cached_download(url, "pdf")
+    except ToolHttpError as error:
+        return {"ok": False, "status": "download_failed", "error": str(error),
+                "nextStep": "Try the next open PDF candidate; offer upload if all fail."}
+    try:
+        document = await get_pdf_parser().parse_bytes(data, "paper.pdf")
+        if not document.markdown.strip():
+            raise PdfParseError("PDF parser returned empty text.")
     except (PdfParseError, ToolHttpError) as error:
-        return {
-            "ok": False,
-            "error": str(error),
-            "nextStep": "Ask the user to upload the paper PDF through the assistant panel.",
-        }
-
-    stored = get_session_store().add_document(session_id, url.rsplit("/", 1)[-1] or "paper.pdf", document, origin=url)
-    return {
-        "ok": True,
-        "documentId": stored.document_id,
-        "parser": document.parser,
-        "charCount": document.char_count,
-        "availableSections": list(document.sections.keys()),
-        "nextStep": "Call read_document with this documentId to read specific sections.",
-    }
+        return {"ok": False, "status": "parse_failed", "error": str(error), "rawPath": path,
+                "nextStep": "The PDF is cached. Retry parsing after fixing the parser or try another candidate."}
+    stored = store.add_document(session_id, "paper.pdf", document, origin=url,
+        metadata={"source": url, "format": "pdf", "rawPath": path,
+                  "sha256": hashlib.sha256(data).hexdigest(), "doi": doi or None,
+                  "pmid": args.get("pmid"), "license": args.get("license"), "version": args.get("version")})
+    return _document_result(stored)
 
 
 async def _check_pdf_reachable(args: dict, _session: str) -> Any:
-    """Confirm a candidate PDF URL is downloadable before spending a parse."""
     try:
-        data, content_type = await get_bytes(args["url"], timeout=60.0, max_bytes=40 * 1024 * 1024)
+        data, _ = await cached_download(args["url"], "pdf")
     except ToolHttpError as error:
-        return {"reachable": False, "error": str(error)}
-    is_pdf = data[:5] == b"%PDF-" or "pdf" in content_type.lower()
-    return {"reachable": True, "isPdf": is_pdf, "bytes": len(data), "contentType": content_type}
+        return {"reachable": False, "isPdf": False, "error": str(error)}
+    return {"reachable": True, "isPdf": True, "bytes": len(data), "contentType": "application/pdf"}
 
 
 async def _list_documents(_args: dict, session_id: str) -> Any:
@@ -125,9 +182,8 @@ async def _list_documents(_args: dict, session_id: str) -> Any:
             {
                 "documentId": d.document_id,
                 "fileName": d.file_name,
-                "origin": d.origin,
-                "charCount": d.document.char_count,
-                "availableSections": list(d.document.sections.keys()),
+                **({"title": d.metadata["title"]} if d.metadata.get("title") else {}),
+                "availableSections": list(d.document.sections) or ["body"],
             }
             for d in stored
         ]
@@ -137,35 +193,67 @@ async def _list_documents(_args: dict, session_id: str) -> Any:
 async def _read_document(args: dict, session_id: str) -> Any:
     stored = get_session_store().get(args["documentId"])
     if not stored:
-        return {"ok": False, "error": "Unknown documentId - it may have expired. Ask the user to re-upload."}
+        return {
+            "ok": False, "status": "document_not_found",
+            "error": "Unknown documentId. Use the returned documentId, not a filename or publication accession.",
+            "availableDocuments": (await _list_documents({}, session_id))["documents"],
+            "nextStep": "Match the intended paper against availableDocuments and retry read_document with its exact documentId. "
+                        "If no matching document exists, call list_documents to refresh; then reacquire a public paper "
+                        "using get_publication_full_text or the publication PDF workflow. Ask for re-upload only "
+                        "when the missing document was user-provided and cannot otherwise be recovered. Do not guess an ID.",
+        }
     if stored.session_id != session_id:
         return {"ok": False, "error": "That document belongs to a different session."}
 
     wanted = args.get("sections")
-    limit = int(args.get("maxChars", 12000))
+    limit = args.get("maxChars", MAX_DOCUMENT_CHARS)
+    offset = args.get("offset", 0)
+    if type(limit) is not int or limit <= 0:
+        return {"ok": False, "error": "maxChars must be a positive integer."}
+    if type(offset) is not int or offset < 0:
+        return {"ok": False, "error": "offset must be a non-negative integer."}
+    limit = min(limit, MAX_DOCUMENT_CHARS)
     sections = stored.document.sections or {"body": stored.document.markdown}
+    if wanted is not None and (not isinstance(wanted, list) or not wanted or
+                               any(not isinstance(name, str) or not name.strip() for name in wanted)):
+        return {"ok": False, "error": "sections must be a non-empty array of chapter names."}
+    names = list(dict.fromkeys(name.strip().lower() for name in wanted)) if wanted else list(sections)
+    missing = [name for name in names if name not in sections]
+    selected = [name for name in names if name in sections]
+    if not selected:
+        return {"ok": False, "error": "Requested sections were not found.",
+                "missingSections": missing, "availableSections": list(sections)}
+    if offset and len(names) != 1:
+        return {"ok": False, "error": "Use offset with exactly one section. Follow a nextReads entry."}
+    if offset > len(sections[selected[0]]):
+        return {"ok": False, "error": "offset exceeds the section length.",
+                "totalChars": len(sections[selected[0]])}
 
-    if wanted:
-        picked = {name: text for name, text in sections.items() if name in {w.lower() for w in wanted}}
-        if not picked:
-            picked = sections
-    else:
-        picked = sections
+    def page(budget: int) -> dict:
+        output, info, next_reads = {}, {}, []
+        for name in selected:
+            text = sections[name]
+            chunk = text[offset:offset + budget]
+            end = offset + len(chunk)
+            budget -= len(chunk)
+            if chunk or offset == len(text):
+                output[name] = chunk
+            info[name] = {"offset": offset, "returnedChars": len(chunk), "totalChars": len(text),
+                          "truncated": end < len(text)}
+            if end < len(text):
+                next_reads.append({"documentId": stored.document_id, "sections": [name],
+                                   "offset": end, "maxChars": limit})
+        return {"ok": True, "documentId": stored.document_id, "fileName": stored.file_name,
+                "availableSections": list(sections), "sections": output, "sectionInfo": info,
+                "missingSections": missing, "truncated": bool(next_reads), "nextReads": next_reads}
 
-    budget = limit
-    output: dict[str, str] = {}
-    for name, text in picked.items():
-        if budget <= 0:
-            break
-        output[name] = text[:budget]
-        budget -= len(output[name])
-
-    return {
-        "ok": True,
-        "fileName": stored.file_name,
-        "availableSections": list(sections.keys()),
-        "sections": output,
-    }
+    result = page(limit)
+    # Escaped characters and metadata count towards the serialized tool budget.
+    # Rebuild a smaller page so continuation offsets always match returned text.
+    while len(json.dumps(result, ensure_ascii=False)) > MAX_RESULT_CHARS and limit > 1:
+        limit = max(1, limit // 2)
+        result = page(limit)
+    return result
 
 
 # -------------------------------------------------------------------- summaries
@@ -181,15 +269,12 @@ def _join(items: list[Any], limit: int = 3) -> str:
     return f"{head}, …" if len(items) > limit else head
 
 
-def _summarize_dataset(result: dict) -> str:
-    files = result.get("files") or {}
+def _summarize_metadata(result: dict) -> str:
     parts: list[str] = [result.get("accession") or "PRIDE project"]
     if result.get("organisms"):
         parts.append(_join(result["organisms"], 2))
     if result.get("instruments"):
         parts.append(_join(result["instruments"], 2))
-    if files.get("rawFileCount"):
-        parts.append(f"{files['rawFileCount']} raw files")
     if result.get("references"):
         parts.append(f"{len(result['references'])} reference(s)")
     return " · ".join(part for part in parts if part)
@@ -204,20 +289,22 @@ def _summarize_raw_files(result: dict) -> str:
 
 def _summarize_publication(result: dict) -> str:
     if not result.get("found"):
-        return "No Europe PMC record matched"
+        return {"identifier_conflict": "PMID/DOI conflict — verification required",
+                "needs_confirmation": "Title match needs confirmation"}.get(result.get("status"), "No downloadable publication found")
     parts = [result.get("title") or "Untitled"]
     if result.get("journal"):
         parts.append(str(result["journal"]))
     parts.append("open full text" if result.get("fullTextAvailable") else "no open full text")
-    if result.get("pdfUrls"):
-        parts.append(f"{len(result['pdfUrls'])} PDF link(s)")
+    pdfs = result.get("pdfCandidates") or result.get("pdfUrls") or []
+    if pdfs:
+        parts.append(f"{len(pdfs)} PDF link(s)")
     return " · ".join(parts)
 
 
 def _summarize_full_text(result: dict) -> str:
-    sections = result.get("sections") or {}
-    chars = sum(len(text or "") for text in sections.values())
-    return f"{result.get('pmcid') or 'Article'} · {_join(list(sections), 4)} · {chars:,} chars"
+    if result.get("ok") is False:
+        return result.get("error") or "Full-text download failed"
+    return f"{result.get('pmcid') or 'Article'} · {_join(result.get('availableSections') or [], 4)} · {result.get('charCount', 0):,} chars"
 
 
 def _summarize_spec(result: dict) -> str:
@@ -322,7 +409,10 @@ def _summarize_read_document(result: dict) -> str:
         return f"Could not read: {result.get('error') or 'unknown error'}"
     sections = result.get("sections") or {}
     chars = sum(len(text or "") for text in sections.values())
-    return f"{result.get('fileName')} · {_join(list(sections), 4)} · {chars:,} chars"
+    suffix = " · more available" if result.get("truncated") else ""
+    if result.get("missingSections"):
+        suffix += " · missing: " + _join(result["missingSections"], 4)
+    return f"{result.get('fileName')} · {_join(list(sections), 4)} · {chars:,} chars{suffix}"
 
 
 # ---------------------------------------------------------------------- schemas
@@ -330,10 +420,11 @@ def _summarize_read_document(result: dict) -> str:
 TOOLS: list[dict[str, Any]] = [
     {
         "declaration": {
-            "name": "get_pride_dataset",
+            "name": "get_pride_metadata",
             "description": (
-                "Fetch PRIDE Archive metadata and raw file names for a ProteomeXchange "
-                "accession. Always the first step when the user gives a PXD identifier."
+                "Fetch only PRIDE Archive project metadata and publication references for a "
+                "ProteomeXchange accession. Does not fetch raw files. Always the first step "
+                "when the user gives a PXD identifier."
             ),
             "parameters": {
                 "type": "object",
@@ -341,10 +432,10 @@ TOOLS: list[dict[str, Any]] = [
                 "required": ["accession"],
             },
         },
-        "handler": _get_dataset,
+        "handler": _get_metadata,
         "status": "Fetching PRIDE metadata",
-        "title": "PRIDE dataset",
-        "summarize": _summarize_dataset,
+        "title": "PRIDE metadata",
+        "summarize": _summarize_metadata,
     },
     {
         "declaration": {
@@ -388,7 +479,7 @@ TOOLS: list[dict[str, Any]] = [
     {
         "declaration": {
             "name": "get_publication_full_text",
-            "description": "Fetch cleaned Europe PMC full text sections for an open-access PMC article.",
+            "description": "Download Europe PMC JATS XML and store the complete article as a session document. Returns documentId for read_document. Prefer this when fullTextAvailable is true.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -396,7 +487,7 @@ TOOLS: list[dict[str, Any]] = [
                     "sections": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Optional subset, e.g. ['methods','results'].",
+                        "description": "Legacy option; the full article is stored. Use read_document to select sections.",
                     },
                 },
                 "required": ["pmcid"],
@@ -426,13 +517,18 @@ TOOLS: list[dict[str, Any]] = [
         "declaration": {
             "name": "parse_pdf_url",
             "description": (
-                "Download a PDF and parse it with MinerU. On setup, prefer asking the user to "
-                "upload via the paperclip instead of calling this. Use only when the user "
-                "explicitly asks to fetch a known free PDF URL."
+                "Download and validate an open PDF candidate, cache the original, and parse it "
+                "with MinerU into a session document. Use after XML is unavailable or fails. "
+                "Try alternate candidates on failure before asking for upload. "
+                "Pass PMID/DOI and license/version from discovery when available."
             ),
             "parameters": {
                 "type": "object",
-                "properties": {"url": {"type": "string"}},
+                "properties": {
+                    "url": {"type": "string"},
+                    "doi": {"type": "string"}, "pmid": {"type": "string"},
+                    "license": {"type": "string"}, "version": {"type": "string"},
+                },
                 "required": ["url"],
             },
         },
@@ -444,12 +540,12 @@ TOOLS: list[dict[str, Any]] = [
     {
         "declaration": {
             "name": "list_documents",
-            "description": "List papers the user has uploaded or that were parsed in this session.",
+            "description": "List available session documents with documentId, fileName, optional title, and availableSections. Includes uploads, pasted text, and retrieved articles. Use to discover documents; if documentId and sections are already known, call read_document directly.",
             "parameters": {"type": "object", "properties": {}},
         },
         "handler": _list_documents,
-        "status": "Checking uploaded documents",
-        "title": "Uploaded documents",
+        "status": "Checking available documents",
+        "title": "Available documents",
         "summarize": _summarize_documents,
     },
     {
@@ -457,14 +553,17 @@ TOOLS: list[dict[str, Any]] = [
             "name": "read_document",
             "description": (
                 "Read sections of a parsed document. Prefer sections ['methods','results'] for "
-                "SDRF annotation evidence."
+                "SDRF annotation evidence. Prefer one section per call. maxChars is a shared character "
+                "budget (default and maximum 12000), not a token count. Check missingSections and "
+                "sectionInfo; when truncated, use nextReads arguments to continue without skipping text."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "documentId": {"type": "string"},
+                    "documentId": {"type": "string", "description": "Exact opaque ID returned by list_documents, get_publication_full_text, or parse_pdf_url (e.g. doc_...). Never use fileName, PMCID, DOI, or a guessed ID. On failure refresh the session document list."},
                     "sections": {"type": "array", "items": {"type": "string"}},
-                    "maxChars": {"type": "integer"},
+                    "maxChars": {"type": "integer", "minimum": 1, "maximum": MAX_DOCUMENT_CHARS},
+                    "offset": {"type": "integer", "minimum": 0, "description": "Character offset within exactly one requested section; use nextReads to continue."},
                 },
                 "required": ["documentId"],
             },
@@ -723,5 +822,6 @@ async def dispatch(name: str, raw_arguments: str | dict, session_id: str) -> str
 
     payload = json.dumps(result, ensure_ascii=False, default=str)
     if len(payload) > MAX_RESULT_CHARS:
-        payload = payload[:MAX_RESULT_CHARS] + '..."[truncated]"'
+        payload = json.dumps({"ok": False, "error": "Tool result exceeds the output limit. Request fewer sections/items or a smaller maxChars.",
+                              "truncated": True, "originalChars": len(payload)}, ensure_ascii=False)
     return payload

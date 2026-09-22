@@ -1,3 +1,4 @@
+import { resolveFactorValue } from '../../../core/models/wizard';
 /**
  * Sample Values Component (Step 3)
  *
@@ -369,7 +370,7 @@ function parseBioRepNumbers(text: string): number[] {
                 }
                 @for (factor of enabledFactors(); track factor.name) {
                   <td class="col-override">
-                    @if (factor.values.length <= 1) {
+                    @if (factor.sourceCharacteristic || factor.values.length <= 1) {
                       <span class="readonly-value">{{ factorSampleValue(sample, factor.name) || '—' }}</span>
                     } @else {
                       <select
@@ -909,13 +910,20 @@ export class SampleValuesComponent implements OnInit {
 
   readonly displayColumns = computed(() => {
     const choices = this.state().characteristicChoices || {};
-    return (this.state().characteristicColumns || []).filter(c =>
-      shouldShowOnSampleValuesStep(c.name, (choices[c.name] || []).length)
+    const columns = [...(this.state().characteristicColumns || [])];
+    for (const factor of this.state().factors.filter(f => f.enabled && f.sourceCharacteristic)) {
+      if (!columns.some(c => c.name === factor.sourceCharacteristic)) {
+        columns.push({ name: factor.sourceCharacteristic!, description: 'Linked study factor source', requirement: 'optional' });
+      }
+    }
+    return columns.filter(c =>
+      shouldShowOnSampleValuesStep(c.name, (choices[c.name] || []).length) ||
+      this.state().factors.some(f => f.enabled && f.sourceCharacteristic === c.name && (choices[c.name] || []).length > 1)
     );
   });
 
   readonly enabledFactors = computed((): WizardFactor[] =>
-    (this.state().factors || []).map(normalizeFactor).filter(f => f.enabled && f.name.trim())
+    (this.state().factors || []).map(normalizeFactor).filter(f => f.enabled && f.scope !== 'run' && f.name.trim())
   );
 
   readonly batchColumns = computed((): BatchColumnOption[] => {
@@ -928,7 +936,7 @@ export class SampleValuesComponent implements OnInit {
         values: this.choices(c.name).map(choice => choice.value),
       }));
     for (const factor of this.enabledFactors()) {
-      if (factor.values.length < 2) continue;
+      if (factor.sourceCharacteristic || factor.values.length < 2) continue;
       cols.push({
         key: FACTOR_BATCH_PREFIX + factor.name,
         label: `factor: ${factor.name}`,
@@ -975,7 +983,8 @@ export class SampleValuesComponent implements OnInit {
   }
 
   factorSampleValue(sample: WizardSampleEntry, factorName: string): string {
-    return sample.factorValues?.[factorName] || '';
+    const factor = this.enabledFactors().find(f => f.name === factorName);
+    return factor ? resolveFactorValue(this.state(), sample, factor) : '';
   }
 
   batchSampleValue(sample: WizardSampleEntry): string {

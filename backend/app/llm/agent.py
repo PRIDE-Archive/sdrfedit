@@ -17,6 +17,7 @@ from typing import Any
 from ..config import get_settings
 from ..schemas import (
     ALLOWED_OPS,
+    OPS_BY_STEP,
     STEP_ORDER,
     STEP_TITLES,
     ChatRequest,
@@ -40,37 +41,16 @@ from .prompts import (
     render_wizard_context,
 )
 from .thinking import ThinkingSplitter
+from .setup_gate import SetupGate, MAX_SAMPLE_COUNT
 
 MAX_HISTORY_MESSAGES = 24
 PROPOSE_TOOL_NAME = "propose_wizard_actions"
 
-# A round can end with a ThinkingSplitter that never saw </think> for two very
-# different reasons: the model answered directly (short, legitimate), or it
-# was still mid-thought when cut off by the token cap (observed in testing --
-# the model can spiral into repetitive reasoning for thousands of tokens
-# before ever closing the block). Length is the only signal available to
-# tell them apart; a genuine direct answer is nowhere near this long.
-MAX_UNCLOSED_THINKING_CHARS = 800
-CUTOFF_FALLBACK_MESSAGE = (
-    "Sorry, that took too long to think through and got cut off. Could you try again?"
-)
-
-
-def _resolve_round_text(text: str, saw_close_tag: bool) -> str:
-    """Guard against dumping a runaway, unclosed <think> block on the user.
-
-    Only applies when </think> was never seen this round -- text that
-    already streamed after a genuine close tag is never touched here,
-    however long it legitimately is.
-    """
-    if not saw_close_tag and len(text) > MAX_UNCLOSED_THINKING_CHARS:
-        return CUTOFF_FALLBACK_MESSAGE
-    return text
-
 # The panel lets the user expand a tool result; beyond this it is unreadable
-# anyway and only costs bandwidth.
+# anyway and only costs bandwidth. Tool arguments are shown in full in the
+# expanded row (they are small); keep a safety cap for pathological dumps.
 MAX_UI_RESULT_CHARS = 8000
-MAX_ARGS_PREVIEW_CHARS = 220
+MAX_ARGS_PREVIEW_CHARS = 8000
 
 
 class AgentEvent(dict):
@@ -195,6 +175,12 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
         messages.append({"role": message.role, "content": content})
 
     tools = [*registry.openai_tool_specs(), PROPOSE_ACTIONS_TOOL]
+    latest_user = next((m.content.strip().rstrip('.。').lower() for m in reversed(request.messages) if m.role == "user"), "")
+    pride_only = latest_user in {"continue with pride metadata only", "仅使用pride元数据继续", "仅使用 pride 元数据继续"}
+    explicit_documents = [doc.document_id for doc in store.list_for_session(request.sessionId) if doc.document_id in latest_user]
+    setup_gate = SetupGate(store, request.sessionId, accession, pride_only=pride_only, explicit_documents=explicit_documents)
+    card_retry = False
+    silent_tool_rounds = 0
 
     answer_parts: list[str] = []
     collected_actions: list[WizardAction] = []
@@ -215,15 +201,34 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
             splitter = ThinkingSplitter()
             yield AgentEvent.status("Thinking…")
 
-            async for event in client.stream(messages, tools):
+            # Refresh the instruction without adding synthetic user turns or extra
+            # system messages (some compatible providers allow only the first one).
+            round_messages = messages
+            if silent_tool_rounds >= 2:
+                round_messages = [
+                    {**messages[0], "content": messages[0]["content"] + "\n\n" +
+                     "Progress update due: the last two or more tool rounds had no visible explanation. "
+                     "Before your next tool calls, write 1–2 short sentences of ordinary response text "
+                     "outside thinking tags, in the user's language, explaining what returned evidence "
+                     "establishes and what remains uncertain. If no conclusion is supported, state that "
+                     "limitation. Do not reveal internal reasoning or repeat the tool log. "
+                     "Continue necessary tool calls in the same response; do not stop at the update."},
+                    *messages[1:],
+                ]
+            async for event in client.stream(round_messages, tools):
                 if event.type == "token":
                     visible = splitter.feed(event.text)
+                    reasoning = splitter.take_reasoning()
+                    if reasoning:
+                        yield AgentEvent(type="thinking", text=reasoning)
                     if visible:
                         round_text.append(visible)
                         yield AgentEvent.token(visible)
+                elif event.type == "reasoning":
+                    yield AgentEvent(type="thinking", text=event.text)
                 elif event.type == "tool_calls":
                     calls = event.tool_calls
-            trailing = _resolve_round_text(splitter.flush(), splitter.saw_close_tag)
+            trailing = splitter.flush()
             if trailing:
                 round_text.append(trailing)
                 yield AgentEvent.token(trailing)
@@ -231,10 +236,19 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
             text = "".join(round_text)
             if text.strip():
                 answer_parts.append(text)
+                silent_tool_rounds = 0
 
             if not calls:
+                if focus_step == "setup" and not collected_actions and not card_retry and not setup_gate.reason() and (skill or request.mode == "step"):
+                    card_retry = True
+                    messages.append({"role": "assistant", "content": text})
+                    messages.append({"role": "user", "content": "The setup evidence is available, but no Apply cards were emitted. Call propose_wizard_actions for supported setup values now. Do not repeat prose or invent unsupported values."})
+                    continue
                 exhausted_rounds = False
                 break
+
+            if not text.strip() and any(call.name != PROPOSE_TOOL_NAME for call in calls):
+                silent_tool_rounds += 1
 
             messages.append(
                 {
@@ -256,6 +270,8 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
             for call in calls:
                 if call.name == PROPOSE_TOOL_NAME:
                     actions, rejected, deferred = _parse_actions(call.arguments, focus_step)
+                    actions, setup_rejected = await setup_gate.filter(actions)
+                    rejected.extend(setup_rejected)
                     actions, gate_rejected = _gate_ontology_actions(
                         actions,
                         request.wizardState,
@@ -304,6 +320,7 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
 
                 parsed = _safe_json(result)
+                setup_gate.observe(call.name, parsed)
                 summary, ok = registry.describe(call.name, parsed)
                 invocation = ToolInvocation(
                     id=call_id,
@@ -330,7 +347,7 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
                         seen_citations.add(key)
                         collected_citations.append(citation)
 
-        if exhausted_rounds:
+        if exhausted_rounds and (focus_step != "setup" or not setup_gate.reason()) and not collected_actions:
             # Search rounds are spent; keep ONLY propose_wizard_actions so the model
             # can still emit Apply cards from terms already verified this turn.
             yield AgentEvent.status("Wrapping up — proposing cards from verified evidence")
@@ -357,12 +374,17 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
             async for event in client.stream(messages, tools=[PROPOSE_ACTIONS_TOOL]):
                 if event.type == "token":
                     visible = closing_splitter.feed(event.text)
+                    reasoning = closing_splitter.take_reasoning()
+                    if reasoning:
+                        yield AgentEvent(type="thinking", text=reasoning)
                     if visible:
                         closing_text.append(visible)
                         yield AgentEvent.token(visible)
                 elif event.type == "tool_calls":
                     closing_calls = event.tool_calls
-            trailing = _resolve_round_text(closing_splitter.flush(), closing_splitter.saw_close_tag)
+                elif event.type == "reasoning":
+                    yield AgentEvent(type="thinking", text=event.text)
+            trailing = closing_splitter.flush()
             if trailing:
                 closing_text.append(trailing)
                 yield AgentEvent.token(trailing)
@@ -405,6 +427,8 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
                         )
                         continue
                     actions, rejected, deferred = _parse_actions(call.arguments, focus_step)
+                    actions, setup_rejected = await setup_gate.filter(actions)
+                    rejected.extend(setup_rejected)
                     actions, gate_rejected = _gate_ontology_actions(
                         actions,
                         request.wizardState,
@@ -427,10 +451,16 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
                             "role": "tool",
                             "tool_call_id": call.id,
                             "content": json.dumps(
-                                _propose_feedback(actions, rejected, deferred)
+                                _propose_feedback(actions, rejected, deferred, focus_step)
                             ),
                         }
                     )
+
+        if not collected_actions and focus_step == "setup" and (skill or request.mode == "step"):
+            reason = setup_gate.reason() or "; ".join(propose_rejected[-3:]) or "The model did not emit valid setup actions. Retry the setup request."
+            miss = "No setup cards were generated: " + reason
+            answer_parts.append(miss)
+            yield AgentEvent.token("\n\n" + miss)
 
         if not collected_actions and focus_step == "characteristics":
             if propose_rejected:
@@ -499,7 +529,8 @@ def _next_step_hint(focus_step: WizardStepId, proposed_actions: bool, mode: str)
 
 
 def _propose_feedback(
-    actions: list[WizardAction], rejected: list[str], deferred: list[str]
+    actions: list[WizardAction], rejected: list[str], deferred: list[str],
+    focus_step: WizardStepId | None = None,
 ) -> dict[str, Any]:
     note = (
         "Suggestions are shown to the user for review. Now write the explanation; "
@@ -507,16 +538,32 @@ def _propose_feedback(
     )
     if rejected:
         note = (
-            "Some actions were rejected (see rejected). For ontology-backed columns, call "
-            "search_ontology(column, query) or search_cell_line first, then propose using "
-            "the exact returned id/label — never paste recipes or free text. " + note
+            "Some actions were rejected. Fix the specific reasons in rejected before re-proposing. "
+            "Use allowedOperations when supplied; do not guess operation names. " + note
         )
+        if focus_step != "runs-files":
+            note += (
+                " For ontology-backed columns, call search_ontology(column, query) or "
+                "search_cell_line first, then propose using the exact returned id/label "
+                "— never paste recipes or free text."
+            )
     if deferred:
         note = (
             "Actions outside the current step were not shown to the user. Re-propose them "
             "when the user reaches that step. " + note
         )
-    return {"accepted": len(actions), "rejected": rejected, "deferred": deferred, "note": note}
+    feedback = {"accepted": len(actions), "rejected": rejected, "deferred": deferred, "note": note}
+    if rejected and focus_step:
+        feedback["allowedOperations"] = OPS_BY_STEP[focus_step]
+        if focus_step == "runs-files":
+            feedback["recovery"] = (
+                'To import verified file names, use replaceWithUnassignedFileNames with '
+                'argsJson \'[["exact1.raw", "exact2.raw"]]\'. Include existing unassigned '
+                'names to retain. Propose the import before applyRunsFilesPlan; the user '
+                'must apply the import first. Do not guess operation names. Accepted '
+                'plans still require their files to be imported before application.'
+            )
+    return feedback
 
 
 def _record_verified_terms(
@@ -726,6 +773,16 @@ def _parse_actions(
             elif all(isinstance(item, str) for item in args):
                 args = [list(args)]
 
+        if op == "setSampleCount" and (len(args) != 1 or type(args[0]) is not int or not 1 <= args[0] <= MAX_SAMPLE_COUNT):
+            rejected.append(f"setSampleCount: expected one integer between 1 and {MAX_SAMPLE_COUNT}.")
+            continue
+        if op in {"setTechnologyTemplate", "setSampleTemplate"} and (len(args) != 1 or not isinstance(args[0], str) or not args[0].strip()):
+            rejected.append(f"{op}: expected one non-empty template ID.")
+            continue
+        if op == "setExperimentTemplates" and (len(args) != 1 or not isinstance(args[0], list) or any(not isinstance(n, str) or not n.strip() for n in args[0])):
+            rejected.append("setExperimentTemplates: expected an array of template IDs.")
+            continue
+
         actions.append(
             WizardAction(
                 step=expected_step,
@@ -759,17 +816,20 @@ def _pretty_json(parsed: Any, raw_result: str) -> str:
 
 
 def _args_preview(raw_arguments: str | None) -> str:
+    """Pretty-printed tool arguments for the expandable row (not a one-line clip)."""
     parsed = _safe_json(raw_arguments or "{}")
-    rendered = (
-        json.dumps(parsed, ensure_ascii=False, default=str)
-        if isinstance(parsed, (dict, list))
-        else str(parsed)
-    )
-    if rendered in ("{}", "[]"):
+    if isinstance(parsed, (dict, list)):
+        rendered = json.dumps(parsed, ensure_ascii=False, indent=2, default=str)
+    else:
+        rendered = str(parsed)
+    if rendered in ("{}", "[]", ""):
         return ""
     if len(rendered) <= MAX_ARGS_PREVIEW_CHARS:
         return rendered
-    return f"{rendered[:MAX_ARGS_PREVIEW_CHARS]}…"
+    return (
+        f"{rendered[:MAX_ARGS_PREVIEW_CHARS]}\n"
+        f"… truncated, {len(rendered) - MAX_ARGS_PREVIEW_CHARS} more characters"
+    )
 
 
 def _evidence_note(name: str, result: Any) -> tuple[str, str] | None:
@@ -777,10 +837,8 @@ def _evidence_note(name: str, result: Any) -> tuple[str, str] | None:
     if not isinstance(result, dict) or result.get("error"):
         return None
 
-    if name == "get_pride_dataset":
+    if name == "get_pride_metadata":
         accession = result.get("accession") or "dataset"
-        files = result.get("files") or {}
-        names = files.get("rawFileNames") or []
         parts = [
             f"PRIDE {accession}: {result.get('title') or 'untitled'}",
             f"organisms: {_listing(result.get('organisms'))}",
@@ -790,7 +848,6 @@ def _evidence_note(name: str, result: Any) -> tuple[str, str] | None:
             f"experiment types: {_listing(result.get('experimentTypes'))}",
             f"quantification: {_listing(result.get('quantificationMethods'))}",
             f"reported PTMs: {_listing(result.get('identifiedPtms'))}",
-            f"raw files: {files.get('rawFileCount', len(names))}, e.g. {_listing(names, 3)}",
             f"references: {_references(result.get('references'))}",
         ]
         return f"pride:{accession}", "; ".join(part for part in parts if not part.endswith(": -"))
@@ -801,7 +858,12 @@ def _evidence_note(name: str, result: Any) -> tuple[str, str] | None:
         return (
             f"raw-files:{accession}",
             f"PRIDE {accession} has {result.get('rawFileCount', len(names))} raw files, "
-            f"e.g. {_listing(names, 5)}. Call get_pride_raw_files again for the full list.",
+            f"e.g. {_listing(names, 5)}."
+            + (
+                " The returned list is truncated; call get_pride_raw_files with a larger limit if needed."
+                if result.get("truncated")
+                else ""
+            ),
         )
 
     if name == "find_publication":
@@ -810,22 +872,12 @@ def _evidence_note(name: str, result: Any) -> tuple[str, str] | None:
         identifier = result.get("pmcid") or result.get("pmid") or result.get("doi") or "paper"
         return (
             f"publication:{identifier}",
-            f"Paper \"{result.get('title')}\" ({result.get('journal')}, {result.get('year')}), "
+            f"Paper \"{result.get('title')}\", "
             f"pmid {result.get('pmid')}, pmcid {result.get('pmcid')}, doi {result.get('doi')}. "
             f"Open full text: {'yes' if result.get('fullTextAvailable') else 'no'}.",
         )
 
-    if name == "get_publication_full_text":
-        pmcid = result.get("pmcid") or "article"
-        sections = result.get("sections") or {}
-        methods = (sections.get("methods") or next(iter(sections.values()), "") or "")[:700]
-        return (
-            f"fulltext:{pmcid}",
-            f"Read {pmcid} sections {_listing(list(sections), 6)}. Methods excerpt: {methods} "
-            f"(call get_publication_full_text with pmcid={pmcid} to re-read in full).",
-        )
-
-    if name in ("read_document", "parse_pdf_url"):
+    if name in ("read_document", "parse_pdf_url", "get_publication_full_text"):
         if result.get("ok") is False:
             return None
         document_id = result.get("documentId") or result.get("fileName") or "document"
@@ -835,8 +887,9 @@ def _evidence_note(name: str, result: Any) -> tuple[str, str] | None:
         detail = f" Methods excerpt: {excerpt}" if excerpt else ""
         return (
             f"document:{document_id}",
-            f"Uploaded document {result.get('fileName') or document_id} has sections "
-            f"{_listing(available, 6)}; call read_document to re-read it.{detail}",
+            f"Session document documentId={document_id}; fileName={result.get('fileName') or '(unknown)'} has sections "
+            f"{_listing(available, 6)}; use this exact documentId with read_document, never the fileName. "
+            f"If unavailable, call list_documents to refresh the ID before reacquiring the paper.{detail}",
         )
 
     return None
@@ -880,7 +933,7 @@ def _citations_from_tool(name: str, result: Any) -> list[Citation]:
             for passage in result.get("passages") or []
         ]
 
-    if name in ("get_pride_dataset", "get_pride_raw_files"):
+    if name in ("get_pride_metadata", "get_pride_raw_files"):
         accession = result.get("accession")
         if not accession:
             return []
@@ -903,7 +956,7 @@ def _citations_from_tool(name: str, result: Any) -> list[Citation]:
             )
         ]
 
-    if name == "get_publication_full_text":
+    if name == "get_publication_full_text" and result.get("ok") is not False:
         return [
             Citation(
                 source="paper",

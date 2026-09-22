@@ -8,6 +8,7 @@
 import {
   Component,
   inject,
+  computed,
   OnInit,
   signal,
   ChangeDetectionStrategy,
@@ -16,7 +17,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 
 import { WizardStateService } from '../../../core/services/wizard-state.service';
-import { WizardFactor } from '../../../core/models/wizard';
+import { WizardFactor, factorCandidates, factorDefinitionErrors } from '../../../core/models/wizard';
 
 @Component({
   selector: 'wizard-factor-values',
@@ -28,7 +29,7 @@ import { WizardFactor } from '../../../core/models/wizard';
       <div class="step-header">
         <h3>Study factors (grouping)</h3>
         <p class="step-description">
-          Declare the experimental comparison variables as
+          Select the variables this study actually compares. Disease is not selected automatically. Declare them as
           <code>factor value[...]</code> columns and add every candidate value.
           On the next step you will assign one value to each sample.
         </p>
@@ -46,6 +47,22 @@ import { WizardFactor } from '../../../core/models/wizard';
         </div>
       </div>
 
+      <div class="info-banner">
+        <div>
+          <label><input type="checkbox" [ngModel]="wizardState.getState().factorDecision === 'none'"
+            (ngModelChange)="wizardState.setFactorDecision($event ? 'none' : 'pending', wizardState.getState().noFactorReason)" />
+            Explicitly continue without study factors</label>
+          @if (wizardState.getState().factorDecision === 'none') {
+            <p>This disables existing factors. Record the reason; technical comparison metadata should still be preserved.</p>
+            <input class="form-input" aria-label="Reason for no study factors"
+              [ngModel]="wizardState.getState().noFactorReason"
+              (ngModelChange)="wizardState.setFactorDecision('none', $event)"
+              placeholder="Why no factor is being encoded in this SDRF" />
+          } @else if (!wizardState.factors().length) {
+            <p>Study comparison not yet confirmed. Add evidence-supported factors or explicitly record why none are needed.</p>
+          }
+        </div>
+      </div>
       <div class="factors-list">
         @for (factor of wizardState.factors(); track $index; let i = $index) {
           <div class="factor-card" [class.disabled]="!factor.enabled">
@@ -77,7 +94,7 @@ import { WizardFactor } from '../../../core/models/wizard';
                 type="button"
                 class="btn-remove"
                 (click)="wizardState.removeFactor(i)"
-                [disabled]="wizardState.factors().length <= 1"
+
                 title="Remove factor"
               >
                 &times;
@@ -85,6 +102,38 @@ import { WizardFactor } from '../../../core/models/wizard';
             </div>
 
             <div class="values-block">
+              <label>Assignment level</label>
+              <select class="form-input" [ngModel]="factor.scope || 'sample'"
+                (ngModelChange)="wizardState.updateFactor(i, { scope: $event, sourceCharacteristic: undefined })">
+                <option value="sample">Biological sample — assign on Step 3</option>
+                <option value="run">MS run / technical comparison — assign on Step 4</option>
+              </select>
+              @if (factor.scope === 'run') {
+                <p>Use for studied technical differences such as acquisition strategy. All files in one run share its value; use separate runs for different strategies without duplicating biological samples. Verify the SDRF term used for the factor name.</p>
+              }
+              @if (factor.scope !== 'run') {
+              <label>Value source</label>
+              <select class="form-input" [ngModel]="factor.sourceCharacteristic || ''"
+                (ngModelChange)="wizardState.updateFactor(i, { sourceCharacteristic: $event })">
+                <option value="">Independent study groups</option>
+                @for (source of characteristicSources(); track source) {
+                  <option [value]="source">{{ source }}</option>
+                }
+              </select>
+              @if (factor.sourceCharacteristic) {
+                <p>Derived from each sample’s linked characteristic. Edit its candidates above and sample values on Step 3.</p>
+                <p>{{ candidates(factor).join(', ') || 'No source values yet' }}</p>
+              }
+              }
+              <label>Comparison evidence / rationale</label>
+              <input class="form-input" type="text" [ngModel]="factor.reasoning || ''"
+                (ngModelChange)="wizardState.updateFactor(i, { reasoning: $event })"
+                placeholder="What does the study compare, and where is it described?" />
+              @if (candidates(factor).length === 1) {
+                <p class="validation-message">Only one candidate value: check whether this variable distinguishes the study groups.</p>
+              }
+              @if (!factor.sourceCharacteristic) {
+
               <label>Candidate values</label>
               <div class="choice-chips">
                 @for (value of factor.values; track value) {
@@ -121,6 +170,7 @@ import { WizardFactor } from '../../../core/models/wizard';
                   Add
                 </button>
               </div>
+              }
             </div>
           </div>
         }
@@ -130,10 +180,13 @@ import { WizardFactor } from '../../../core/models/wizard';
         + Add factor
       </button>
 
+      @for (error of definitionErrors(); track $index) {
+        <p class="validation-message">{{ error }}</p>
+      }
       @if (!wizardState.isFactorsDefined()) {
         <div class="validation-message">
           <span class="warning-icon">!</span>
-          Enable at least one factor with a name and one or more candidate values.
+          Define at least one supported factor, or explicitly choose no study factors and record a reason.
         </div>
       }
     </div>
@@ -342,6 +395,13 @@ import { WizardFactor } from '../../../core/models/wizard';
 })
 export class FactorValuesComponent implements OnInit {
   readonly wizardState = inject(WizardStateService);
+  readonly characteristicSources = computed(() => Array.from(new Set([
+    ...this.wizardState.getState().characteristicColumns.map(c => c.name),
+    ...Object.keys(this.wizardState.getState().characteristicChoices),
+    ...this.wizardState.factors().flatMap(f => f.sourceCharacteristic ? [f.sourceCharacteristic] : []),
+  ])).filter(name => name.startsWith('characteristics[')));
+  readonly definitionErrors = computed(() => factorDefinitionErrors(this.wizardState.getState()));
+  candidates(factor: WizardFactor): string[] { return factorCandidates(this.wizardState.getState(), factor); }
   readonly draftValues = signal<Record<number, string>>({});
 
   ngOnInit(): void {

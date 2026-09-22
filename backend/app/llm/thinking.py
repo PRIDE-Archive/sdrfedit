@@ -24,16 +24,19 @@ class ThinkingSplitter:
         self._buffer = ""
         self._in_thinking = True
         self._saw_close_tag = False
+        self._reasoning = ""
+
+    def take_reasoning(self) -> str:
+        """Return confirmed inline reasoning separately from answer tokens."""
+        text, self._reasoning = self._reasoning, ""
+        return text
 
     @property
     def saw_close_tag(self) -> bool:
         """True once </think> has actually been seen this round.
 
-        Lets a caller distinguish "the model answered directly, no thinking"
-        (flush() text is a legitimate short answer) from "the model was still
-        mid-thought when the round ended, e.g. cut off by a token cap"
-        (flush() text is a runaway, possibly huge chunk of raw reasoning that
-        should not be dumped on the user as-is -- see agent.py).
+        False can mean either a direct answer without thinking tags or an
+        unfinished thinking block; this flag alone cannot distinguish them.
         """
         return self._saw_close_tag
 
@@ -55,6 +58,7 @@ class ThinkingSplitter:
         if idx == -1:
             return ""
 
+        self._reasoning += self._buffer[:idx].strip().removeprefix("<think>").strip()
         self._buffer = self._buffer[idx + len(CLOSE_TAG) :]
         self._in_thinking = False
         self._saw_close_tag = True

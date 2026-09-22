@@ -13,6 +13,22 @@ from app.llm.prompts import (
     render_wizard_context,
 )
 from app.schemas import CharacteristicColumnInfo, FactorInfo, MsRunSummary, WizardSnapshot
+from app.schemas import OPS_BY_STEP
+
+
+def test_every_step_advertises_its_entire_operation_whitelist():
+    for step, operations in OPS_BY_STEP.items():
+        text = render_step_focus(step, None)
+        catalogue = text.split("Operation arguments and usage:")[0]
+        for operation in operations:
+            assert operation in catalogue
+
+
+def test_runs_files_explains_import_arguments_and_dependency():
+    text = render_step_focus("runs-files", WizardSnapshot())
+    assert 'replaceWithUnassignedFileNames [["exact1.raw", "exact2.raw"]]' in text
+    assert "import card BEFORE the plan card" in text
+    assert "existing unassigned names" in text
 
 
 def test_wizard_steps_doc_matches_new_ui():
@@ -32,13 +48,15 @@ def test_setup_goal_is_template_first():
     assert "rawfilecount" in goal.replace(" ", "").replace("_", "")
 
 
-def test_sample_count_rules_define_sum_of_bio_reps():
+def test_sample_count_rules_define_accession_scoped_sources():
     text = SAMPLE_COUNT_RULES.lower()
     assert "biological" in text
     assert "condition" in text
     assert "raw file" in text or "rawfilecount" in text.replace(" ", "").replace("_", "")
     assert "design:" in SAMPLE_COUNT_RULES
-    assert "rejected:" in SAMPLE_COUNT_RULES
+    assert "scope:" in SAMPLE_COUNT_RULES
+    assert "files:" in SAMPLE_COUNT_RULES
+    assert "uncertainty:" in SAMPLE_COUNT_RULES
     assert SAMPLE_COUNT_RULES in SETUP_PROCEDURE
 
 
@@ -67,7 +85,7 @@ def test_samples_goal_follows_wizard_order():
 
 def test_runs_files_goal_requires_named_mapping():
     goal = STEP_GOALS["runs-files"].lower()
-    assert "assignfilestorunsbyname" in goal.replace(" ", "").replace("_", "")
+    assert "applyrunsfilesplan" in goal.replace(" ", "").replace("_", "")
     assert "fraction" in goal or "technical" in goal
 
 
@@ -93,7 +111,7 @@ def test_render_step_focus_runs_files_includes_procedure():
     assert RUNS_FILES_PROCEDURE.splitlines()[0] in text
     assert "assignFilesToRunsByName" in text
     assert "Editable table" in text or "fractionId" in text
-    assert "no MS runs yet" in text
+    assert "No groups yet" in text
 
 
 def test_render_step_focus_samples_includes_procedure():
@@ -167,15 +185,15 @@ def test_render_step_focus_setup_includes_procedure():
     assert "STOP" in text
 
 
-def test_setup_procedure_pdf_gate_prefers_mineru_session_document():
+def test_setup_procedure_prefers_xml_session_document_before_pdf():
     text = SETUP_PROCEDURE.lower()
     assert "list_documents" in SETUP_PROCEDURE
     assert "parse_pdf_url" in SETUP_PROCEDURE
-    assert "check_pdf_url" in SETUP_PROCEDURE
+    assert SETUP_PROCEDURE.index("get_publication_full_text") < SETUP_PROCEDURE.index("parse_pdf_url")
     assert "parse_pdf_url" in text
     assert "get_publication_full_text" in SETUP_PROCEDURE
     assert "session document" in text
-    assert "paperclip" in text
+    assert "upload" in text
     assert "proposing templates" in text or "propose templates" in text
     # Gate must appear before template listing
     assert SETUP_PROCEDURE.index("list_documents") < SETUP_PROCEDURE.index("list_sdrf_templates")
@@ -191,7 +209,7 @@ def test_setup_procedure_no_publication_offers_pride_fallback():
 def test_characteristics_procedure_reuses_evidence_and_limits_lookups():
     text = CHARACTERISTICS_PROCEDURE.lower()
     assert "evidence already gathered" in text
-    assert "do not call get_pride_dataset" in text
+    assert "do not call get_pride_metadata" in text
     assert "at most one lookup per column" in text
     assert "search_ontology" in text
     assert "recommended" in text
@@ -253,3 +271,25 @@ def test_render_wizard_context_accepts_legacy_string_columns():
     snapshot = WizardSnapshot(characteristicColumns=["characteristics[organism]"])
     text = render_wizard_context(snapshot)
     assert "characteristics[organism]" in text
+
+
+def test_rendered_setup_scopes_counts_and_reconciles_file_coverage():
+    text = render_step_focus("setup", WizardSnapshot(sampleCount=98))
+    for rule in (
+        "CURRENT accession",
+        "multiple accessions",
+        "MGF-only records may exist",
+        "Matching filename stems are candidate links",
+        "Equality is valid",
+        "omit setSampleCount, preserve the current value",
+        "Record blanks/QC/reference pools separately",
+        "ONLY when groups contain disjoint",
+    ):
+        assert rule in text
+    for obsolete in (
+        "NEVER rawFileCount",
+        "never set sampleCount = rawFileCount",
+        "explicitly reject conditionCount / rawFileCount",
+        "universal definition",
+    ):
+        assert obsolete not in text

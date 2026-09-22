@@ -185,3 +185,28 @@ rule behind a column before suggesting a value for it.
 python -m pytest tests -q          # unit tests, no network or API keys needed
 python scripts/smoke_tools.py      # exercises PRIDE / OLS / Europe PMC / templates (network)
 ```
+
+
+### Publication acquisition
+
+PRIDE references are resolved using PMID (restricted to MED records), then normalized
+DOI. Conflicting identifiers require clarification; title-only matches are candidates.
+The assistant reuses matching session documents, otherwise downloads Europe PMC JATS
+XML first. XML is stored as a `documentId`, just like PDFs parsed through MinerU, and
+can be read with `read_document`. Tables and supplementary-file references are retained;
+supplementary attachments themselves are not automatically downloaded in this version.
+
+If XML is unavailable or fails, open PDF candidates from Europe PMC and Unpaywall are
+tried before offering upload. Set `UNPAYWALL_EMAIL` to a real maintainer contact to enable
+Unpaywall. Without it, Europe PMC acquisition still works. PDF parsing requires the
+existing MinerU configuration; XML does not. Only an actual `%PDF-` response is accepted.
+
+Original downloads are cached in `PUBLICATION_CACHE_DIR` (default `data/publications`)
+for `PUBLICATION_CACHE_TTL_SECONDS` (default seven days), with a size limit of
+`PUBLICATION_CACHE_MAX_MB` (default 256). Cleanup runs on cache access. Mount this path
+on persistent storage to reuse downloads across container restarts. Parsed documents
+remain session-scoped and expire with the existing session TTL. A failed PDF parse
+retains the original download for retry. Tool results distinguish `download_failed`,
+`parse_failed`, and `ready`; discovery distinguishes `abstract_only`, `unavailable`,
+`identifier_conflict`, and `needs_confirmation`. Transient HTTP errors retry up to
+three attempts; abstracts are not treated as full-text evidence.

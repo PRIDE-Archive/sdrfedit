@@ -30,7 +30,7 @@ class ToolCall:
 
 @dataclass
 class StreamEvent:
-    type: str  # token | tool_calls | done
+    type: str  # token | reasoning | tool_calls | done
     text: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
     finish_reason: str | None = None
@@ -113,6 +113,10 @@ class LlmClient:
                         continue
                     choice = choices[0]
                     delta = choice.get("delta") or {}
+
+                    reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+                    if isinstance(reasoning, str) and reasoning:
+                        yield StreamEvent(type="reasoning", text=reasoning)
 
                     content = delta.get("content")
                     if content:

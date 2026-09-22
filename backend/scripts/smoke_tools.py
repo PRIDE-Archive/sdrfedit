@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.tools import registry  # noqa: E402
 
 CHECKS: list[tuple[str, dict]] = [
-    ("get_pride_dataset", {"accession": "PXD000001"}),
+    ("get_pride_metadata", {"accession": "PXD000001"}),
     ("get_pride_raw_files", {"accession": "PXD000001", "limit": 5}),
     ("find_publication", {"pmid": "24657495"}),
     ("get_publication_full_text", {"pmcid": "PMC4047622", "sections": ["methods"]}),

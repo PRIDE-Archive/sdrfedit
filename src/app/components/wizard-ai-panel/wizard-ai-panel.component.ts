@@ -57,8 +57,10 @@ import {
 import { WizardStateService } from '../../core/services/wizard-state.service';
 import { resolveAssistantNavigation } from '../../core/utils/wizard-navigation';
 import { ActionCardListComponent } from './action-card-list.component';
-import { renderMarkdownLite } from './markdown-lite';
+import { MarkdownLitePipe } from './markdown-lite.pipe';
 import { ToolCallBlockComponent } from './tool-call-list.component';
+import { ActivityDisclosureComponent } from './activity-disclosure.component';
+import { appendThinking, finishThinking, recordThinking } from '../../core/utils/assistant-thinking';
 
 interface QuickStart {
   label: string;
@@ -76,7 +78,7 @@ const DEFAULT_WIDTH = 400;
 @Component({
   selector: 'wizard-ai-panel',
   standalone: true,
-  imports: [CommonModule, FormsModule, ToolCallBlockComponent, ActionCardListComponent],
+  imports: [CommonModule, FormsModule, ToolCallBlockComponent, ActionCardListComponent, ActivityDisclosureComponent, MarkdownLitePipe],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <aside class="ai-panel" [class.collapsed]="collapsed()" [style.width.px]="panelWidth()">
@@ -210,7 +212,9 @@ const DEFAULT_WIDTH = 400;
             </div>
           </div>
 
-          <div class="messages" #scroller>
+          <div class="messages" #scroller (scroll)="onMessagesScroll()"
+            (wheel)="onMessagesWheel($event)" (touchstart)="pauseFollowing()"
+            (keydown)="onMessagesKeydown($event)" tabindex="0" aria-label="Conversation">
             @if (messages().length === 0) {
               <div class="intro">
                 <p class="intro-title">I fill in this wizard with you, one page at a time.</p>
@@ -310,24 +314,34 @@ const DEFAULT_WIDTH = 400;
                   }
 
                   @for (item of timelineOf(message); track item.id) {
-                    @if (item.kind === 'tool') {
+                    @if (item.kind === 'thinking') {
+                      <assistant-activity title="Thinking"
+                        [active]="!!message.pending && item.finishedAt === undefined"
+                        [meta]="thinkingDuration(item)">
+                        @if (item.reasoning) {
+                          <div class="markdown" [innerHTML]="item.reasoning | assistantMarkdown"></div>
+                        } @else {
+                          <div class="live">{{ item.finishedAt === undefined ? 'Waiting for reasoning content…' : 'No reasoning content was returned for this phase.' }}</div>
+                        }
+                      </assistant-activity>
+                    } @else if (item.kind === 'tool') {
                       <assistant-tool-block [call]="item.call" />
                     } @else if (item.kind === 'text' && item.content) {
-                      <div class="markdown" [innerHTML]="render(item.content)"></div>
+                      <div class="markdown" [innerHTML]="item.content | assistantMarkdown"></div>
                     }
                   }
 
-                  @if (message.pending && !message.content && !timelineOf(message).length && !message.status) {
-                    <div class="live"><span class="pulse"></span>Thinking</div>
-                  } @else if (message.status && !hasRunningTool(message)) {
-                    <div class="live"><span class="pulse"></span>{{ message.status }}</div>
+                  @if (message.pending && message.content && !message.status && !hasRunningTool(message)) {
+                    <assistant-activity title="Responding" [active]="true">
+                      <div class="live">Writing the response…</div>
+                    </assistant-activity>
                   }
 
                   @if (message.error) {
                     <div class="inline-error">{{ message.error }}</div>
                   }
 
-                  @if (cardsFor(message).length) {
+                  @if (!message.pending && cardsFor(message).length) {
                     <assistant-action-cards
                       [cards]="cardsFor(message)"
                       (apply)="apply($event)"
@@ -359,7 +373,7 @@ const DEFAULT_WIDTH = 400;
                       <span class="next-text">
                         Next: step {{ message.nextStep.index + 1 }}, {{ message.nextStep.title }}
                       </span>
-                      <button class="next-btn" [disabled]="busy()" (click)="goNext(message.nextStep)">
+                      <button class="next-btn" [disabled]="busy() || !wizardState.canProceed()" (click)="goNext(message.nextStep)">
                         Continue &rarr;
                       </button>
                     </div>
@@ -369,6 +383,9 @@ const DEFAULT_WIDTH = 400;
             }
           </div>
 
+          @if (!followingLatest()) {
+            <button type="button" class="latest-btn" (click)="jumpToLatest()">↓ Back to latest</button>
+          }
           <div class="composer">
             @if (slashHintsVisible()) {
               <div class="slash-menu">
@@ -836,6 +853,10 @@ const DEFAULT_WIDTH = 400;
 
     /* ----------------------------------------------------------- messages */
 
+    .latest-btn { align-self: center; flex-shrink: 0; margin: 4px 0 8px; padding: 6px 12px;
+      border: 1px solid #d8dce5; border-radius: 16px; background: white; color: #4f46e5;
+      font: inherit; font-size: 12px; cursor: pointer; }
+    .latest-btn:focus-visible { outline: 2px solid #818cf8; outline-offset: 2px; }
     .messages {
       flex: 1;
       overflow-y: auto;
@@ -1369,11 +1390,14 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
   readonly api = inject(AssistantApiService);
   readonly history = inject(ChatHistoryService);
   private readonly bridge = inject(WizardAiBridgeService);
-  private readonly wizardState = inject(WizardStateService);
+  readonly wizardState = inject(WizardStateService);
 
   private readonly _messages = signal<AssistantChatMessage[]>([]);
   private readonly _cards = signal<Record<string, WizardActionCard>>({});
   private readonly _busy = signal(false);
+  readonly followingLatest = signal(true);
+  private scrollFrame: number | null = null;
+  private readonly timelineCache = new WeakMap<AssistantChatMessage, AssistantTimelineItem[]>();
   private readonly _collapsed = signal(false);
   private readonly _composerFile = signal<AssistantAttachment | null>(null);
   private readonly _width = signal(readStoredWidth());
@@ -1475,6 +1499,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    if (this.scrollFrame !== null) cancelAnimationFrame(this.scrollFrame);
     if (this.persistTimer) {
       clearTimeout(this.persistTimer);
       this.persistTimer = null;
@@ -1598,11 +1623,23 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
   }
 
   timelineOf(message: AssistantChatMessage): AssistantTimelineItem[] {
-    return migrateTimeline(message);
+    if (message.timeline?.length) return message.timeline;
+    let timeline = this.timelineCache.get(message);
+    if (!timeline) {
+      timeline = migrateTimeline(message);
+      this.timelineCache.set(message, timeline);
+    }
+    return timeline;
+  }
+
+  thinkingDuration(item: Extract<AssistantTimelineItem, { kind: 'thinking' }>): string {
+    if (item.finishedAt === undefined) return '';
+    const seconds = Math.max(0, (item.finishedAt - item.startedAt) / 1000);
+    return seconds < 60 ? `${seconds.toFixed(1)} s` : `${Math.floor(seconds / 60)} min ${Math.floor(seconds % 60)} s`;
   }
 
   hasRunningTool(message: AssistantChatMessage): boolean {
-    return migrateTimeline(message).some(
+    return this.timelineOf(message).some(
       item => item.kind === 'tool' && !!item.call.running
     );
   }
@@ -1634,6 +1671,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
       this._composerFile.set(null);
       this.queuedStep = null;
       this.restoreWizard(session);
+      this.followingLatest.set(true);
       this.scrollToBottom();
     } finally {
       this.loadingSession = false;
@@ -1682,10 +1720,6 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
       this.persistTimer = null;
       this.persistActive();
     }, 400);
-  }
-
-  render(text: string): string {
-    return renderMarkdownLite(text);
   }
 
   stepLabel(step: AssistantStepId): string {
@@ -1750,7 +1784,8 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
   stop(): void {
     this.api.abort();
     this._busy.set(false);
-    this.patchLast(message => ({ ...message, pending: false, status: undefined }));
+    this.patchLast(message => ({ ...message, pending: false, status: undefined,
+      timeline: clearRunningTools(message.timeline || []) }));
     this.persistActive();
   }
 
@@ -1873,7 +1908,6 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
     const content =
       options.modelPrompt ||
       (attachment ? [uploadPrompt, raw].filter(Boolean).join('\n\n') : '') ||
-      slash?.prompt ||
       raw;
     if (!content && !attachment) return;
 
@@ -1899,7 +1933,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
         role: 'assistant',
         content: '',
         focusStep,
-        timeline: [],
+        timeline: recordThinking([], 'Waiting for the assistant’s next update…'),
         toolCalls: [],
         citations: [],
         actionIds: [],
@@ -1907,6 +1941,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
       },
     ]);
     this._busy.set(true);
+    this.followingLatest.set(true);
     this.markAdvised(stepIndex);
     this.scrollToBottom();
 
@@ -1929,8 +1964,13 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
 
       for await (const event of stream) {
         switch (event.type) {
+          case 'thinking':
+            this.patchLast(message => ({ ...message,
+              timeline: appendThinking(message.timeline || [], event.text) }));
+            break;
           case 'status':
-            this.patchLast(message => ({ ...message, status: event.text }));
+            this.patchLast(message => ({ ...message, status: event.text,
+              timeline: recordThinking(message.timeline || [], event.text) }));
             break;
           case 'tool_start':
             this.patchLast(message => upsertTool(message, { ...event.tool, running: true }));
@@ -1942,7 +1982,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
             break;
           case 'token':
             this.patchLast(message => {
-              const timeline = appendText(message.timeline || [], event.text);
+              const timeline = appendText(finishThinking(message.timeline || []), event.text);
               return {
                 ...message,
                 status: undefined,
@@ -2028,37 +2068,66 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
   }
 
   private scrollToBottom(): void {
-    // Runs after the current change detection pass has rendered the new content.
-    setTimeout(() => {
+    if (!this.followingLatest() || this.scrollFrame !== null) return;
+    // Coalesce stream events into one scroll per frame, and respect user input
+    // even when it arrives after this callback was scheduled.
+    this.scrollFrame = requestAnimationFrame(() => {
+      this.scrollFrame = null;
+      if (!this.followingLatest()) return;
       const element = this.scroller()?.nativeElement;
       if (element) element.scrollTop = element.scrollHeight;
     });
   }
 
-  // ------------------------------------------------------------------- cards
+  pauseFollowing(): void { this.followingLatest.set(false); }
 
-  /**
-   * Memoised so each turn keeps a stable array reference between change detection
-   * passes; a fresh array every pass would churn the child component's input.
-   */
-  private readonly cardsByMessage = computed(() => {
-    const map = this._cards();
-    const grouped = new Map<AssistantChatMessage, WizardActionCard[]>();
-    for (const message of this._messages()) {
-      if (message.role !== 'assistant' || !message.actionIds?.length) continue;
-      const cards = message.actionIds
-        .map(id => map[id])
-        .filter((card): card is WizardActionCard => !!card);
-      if (cards.length) grouped.set(message, cards);
-    }
-    return grouped;
-  });
-
-  cardsFor(message: AssistantChatMessage): WizardActionCard[] {
-    return this.cardsByMessage().get(message) || NO_CARDS;
+  onMessagesWheel(event: WheelEvent): void {
+    if (event.deltaY < 0) this.pauseFollowing();
   }
 
+  onMessagesKeydown(event: KeyboardEvent): void {
+    if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) this.pauseFollowing();
+  }
+
+  onMessagesScroll(): void {
+    const element = this.scroller()?.nativeElement;
+    if (!element) return;
+    this.followingLatest.set(element.scrollHeight - element.scrollTop - element.clientHeight <= 24);
+  }
+
+  jumpToLatest(): void {
+    this.followingLatest.set(true);
+    this.scrollToBottom();
+  }
+
+  // ------------------------------------------------------------------- cards
+
+  // Streamed text does not change actionIds or card objects. Preserve the input
+  // array so completed cards remain untouched while another message streams.
+  private readonly cardListCache = new WeakMap<string[], WizardActionCard[]>();
+
+  cardsFor(message: AssistantChatMessage): WizardActionCard[] {
+    const ids = message.actionIds;
+    if (message.pending || !ids?.length) return NO_CARDS;
+    const map = this._cards();
+    const cached = this.cardListCache.get(ids);
+    if (cached && cached.length === ids.length && cached.every((card, index) => card === map[ids[index]])) {
+      return cached;
+    }
+    const cards = ids.map(id => map[id]).filter((card): card is WizardActionCard => !!card);
+    this.cardListCache.set(ids, cards);
+    return cards;
+  }
+
+  private applyingCard = false;
+
   async apply(card: WizardActionCard): Promise<void> {
+    if (this.applyingCard) return;
+    if (card.status === 'failed') {
+      await this.send(`Repair the failed suggestion "${card.action.label}" using the CURRENT wizard snapshot. Error: ${card.error || 'application failed'}. Original action: ${JSON.stringify(card.action)}. Propose a corrected plan; do not repeat references to missing groups.`, { focusStep: card.action.step });
+      return;
+    }
+    this.applyingCard = true;
     const preview = this.bridge.previewAction(card.action);
     try {
       await this.bridge.applyAction(card.action);
@@ -2069,6 +2138,8 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
           ? error.message
           : 'Could not apply this suggestion.';
       this.updateCard(card.id, { status: 'failed', preview, error: message });
+    } finally {
+      this.applyingCard = false;
     }
   }
 
@@ -2099,6 +2170,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
   async applyMany(cards: WizardActionCard[]): Promise<void> {
     for (const card of cards) {
       if (this._cards()[card.id]?.status === 'pending') await this.apply(card);
+      if (this._cards()[card.id]?.status === 'failed') break;
     }
   }
 
@@ -2177,7 +2249,7 @@ function upsertTool(
   call: AssistantToolCall
 ): AssistantChatMessage {
   if (!call?.id) return { ...message, status: undefined };
-  const timeline = [...(message.timeline || [])];
+  const timeline = finishThinking(message.timeline || []);
   const index = timeline.findIndex(item => item.kind === 'tool' && item.call.id === call.id);
   const item: AssistantTimelineItem = { kind: 'tool', id: call.id, call };
   if (index >= 0) {
@@ -2194,7 +2266,7 @@ function upsertTool(
 }
 
 function clearRunningTools(timeline: AssistantTimelineItem[]): AssistantTimelineItem[] {
-  return timeline.map(item =>
+  return finishThinking(timeline).map(item =>
     item.kind === 'tool' && item.call.running
       ? { ...item, call: { ...item.call, running: false } }
       : item

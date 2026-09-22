@@ -12,6 +12,7 @@ import {
   inject,
   signal,
   computed,
+  effect,
   HostListener,
   ChangeDetectionStrategy,
 } from '@angular/core';
@@ -62,7 +63,7 @@ const ACQUISITION: { id: AcquisitionMethod; label: string }[] = [
         <div>
           <h3>Runs &amp; Files</h3>
           <p>
-            Create MS runs on the left. For each run: pick label kit → map channels,
+            Create sample/channel groups on the left. Each raw file represents an acquisition. For each run: pick label kit → map channels,
             then add raw files and fill fraction / tech.
           </p>
         </div>
@@ -190,7 +191,7 @@ const ACQUISITION: { id: AcquisitionMethod; label: string }[] = [
       <div class="workspace">
         <nav class="rail">
           <div class="rail-h">
-            <span>MS runs</span>
+            <span>Sample/channel groups</span>
             <button type="button" class="icon" title="Add run" (click)="addRun()">+</button>
           </div>
           @for (run of msRuns(); track run.id) {
@@ -220,6 +221,21 @@ const ACQUISITION: { id: AcquisitionMethod; label: string }[] = [
 
         <section class="pane">
           @if (activeRun(); as run) {
+              @if (runFactors().length) {
+                <div class="block">
+                  <h4>Technical study factors</h4>
+                  <p class="help">Choose a value for every enabled technical factor before continuing.</p>
+                  <p class="help">Assign the conditions studied in this run. The same biological sample can appear in runs with different conditions.</p>
+                  @for (factor of runFactors(); track factor.name) {
+                    <label>{{ factor.name }}</label>
+                    <select class="input" [ngModel]="run.factorValues?.[factor.name] || (factor.values.length === 1 ? factor.values[0] : '')"
+                      (ngModelChange)="wizardState.setRunFactorValue(run.id, factor.name, $event)">
+                      <option value="">Select…</option>
+                      @for (value of factor.values; track value) { <option [value]="value">{{ value }}</option> }
+                    </select>
+                  }
+                </div>
+              }
               <!-- Step 1: label kit -->
               <div class="block">
                 <div class="block-h">
@@ -410,7 +426,9 @@ const ACQUISITION: { id: AcquisitionMethod; label: string }[] = [
                       <thead>
                         <tr>
                           <th style="width:28px"></th>
-                          <th>Raw file</th>
+                          <th>Raw file / assay</th>
+                          <th>Samples / labels</th>
+                          <th>Study factors</th>
                           <th style="width:72px">Fraction</th>
                           <th style="width:72px">Tech</th>
                           <th style="width:72px">→ rows</th>
@@ -426,6 +444,8 @@ const ACQUISITION: { id: AcquisitionMethod; label: string }[] = [
                               <input class="input mono file" [ngModel]="item.file.fileName" [title]="item.file.fileName"
                                 (ngModelChange)="wizardState.updateDataFile(item.index, { fileName: $event })" />
                             </td>
+                            <td>{{ mappingSummary(run) }}</td>
+                            <td>{{ factorSummary(run) }}</td>
                             <td>
                               <input type="number" class="num" min="1" [ngModel]="item.file.fractionId ?? 1"
                                 (ngModelChange)="wizardState.updateDataFile(item.index, { fractionId: +$event || 1 })" />
@@ -725,6 +745,7 @@ const ACQUISITION: { id: AcquisitionMethod; label: string }[] = [
   `],
 })
 export class RunsFilesComponent implements OnInit {
+  readonly runFactors = computed(() => this.wizardState.factors().filter(f => f.enabled && f.scope === 'run'));
   @Input() aiEnabled = false;
 
   readonly wizardState = inject(WizardStateService);
@@ -752,7 +773,7 @@ export class RunsFilesComponent implements OnInit {
     base: Set<number>;
   } | null = null;
 
-  readonly fracMode = signal<FillMode>('seq');
+  readonly fracMode = signal<FillMode>('all1');
   readonly techMode = signal<FillMode>('all1');
   readonly fracStart = signal(1);
   readonly techStart = signal(1);
@@ -785,6 +806,14 @@ export class RunsFilesComponent implements OnInit {
     const id = this.selectedRunId();
     if (!id) return null;
     return this.msRuns().find(r => r.id === id) || null;
+  });
+
+  private readonly syncSelectedRun = effect(() => {
+    const runs = this.msRuns();
+    if (!runs.some(run => run.id === this.selectedRunId())) {
+      this.selectedRunId.set(runs[0]?.id ?? null);
+      this.closeSamplePicker();
+    }
   });
 
   ngOnInit(): void {
@@ -1056,8 +1085,6 @@ export class RunsFilesComponent implements OnInit {
     this.wizardState.assignDataFilesToRun([...this.pickerSelected()], runId);
     const n = this.pickerSelected().size;
     this.closePicker();
-    this.applyFraction(runId, true);
-    this.applyTech(runId, true);
     this.statusError.set(false);
     this.statusMsg.set(`Added ${n} file(s) to ${this.activeRun()?.name || 'run'}.`);
   }
@@ -1141,23 +1168,14 @@ export class RunsFilesComponent implements OnInit {
       const s = Math.max(1, start || 1);
       return Array.from({ length: count }, (_, i) => s + i);
     }
-    const nums = customText
-      .split(/[\s,;]+/)
-      .map(t => t.trim())
-      .filter(Boolean)
-      .map(t => parseInt(t, 10))
-      .filter(n => Number.isFinite(n) && n >= 1);
-    if (nums.length === 0) {
+    const tokens = customText.split(/[\s,;]+/).filter(Boolean);
+    const nums = tokens.map(Number);
+    if (nums.length !== count || nums.some(n => !Number.isInteger(n) || n < 1)) {
       this.statusError.set(true);
-      this.statusMsg.set('Enter custom numbers (one per file, same order).');
+      this.statusMsg.set(`Enter exactly ${count} positive integers, one per file.`);
       return null;
     }
-    if (nums.length < count) {
-      // pad with last value
-      const last = nums[nums.length - 1];
-      while (nums.length < count) nums.push(last);
-    }
-    return nums.slice(0, count);
+    return nums;
   }
 
   guessFractionTech(runId: string): void {
@@ -1250,6 +1268,14 @@ export class RunsFilesComponent implements OnInit {
   plannedT(): number { return plannedTechRepCount(this.state()); }
   estimatedRows(): number { return estimatePlannerSdrfRows(this.state()); }
   estimatedFiles(): number { return estimatePlannerFileSlots(this.state()); }
+
+  mappingSummary(run: WizardMsRun): string {
+    return run.channels.filter(c => c.role !== 'empty').map(c => `${c.label}: ${this.channelSampleNames(c).join(' + ')}`).join('; ');
+  }
+
+  factorSummary(run: WizardMsRun): string {
+    return this.runFactors().map(f => `${f.name}: ${run.factorValues?.[f.name] || (f.values.length === 1 ? f.values[0] : 'not assigned')}`).join('; ') || '—';
+  }
 
   validationHint(): string {
     if (!this.wizardState.isStep4Valid()) {

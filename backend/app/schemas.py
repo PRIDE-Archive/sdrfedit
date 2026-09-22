@@ -51,6 +51,8 @@ ALLOWED_OPS: dict[str, WizardStepId] = {
     "setExperimentDescription": "setup",
     "addCharacteristicChoice": "characteristics",
     "setFactors": "characteristics",
+    "setNoStudyFactors": "characteristics",
+    "setRunFactorValue": "runs-files",
     "addFactor": "characteristics",
     "addFactorValue": "characteristics",
     "setSampleCharacteristicValue": "samples",
@@ -62,6 +64,7 @@ ALLOWED_OPS: dict[str, WizardStepId] = {
     "setSampleFactorValue": "samples",
     "setLabelConfig": "runs-files",
     "autoPackSamplesIntoRuns": "runs-files",
+    "applyRunsFilesPlan": "runs-files",
     "replaceWithUnassignedFileNames": "runs-files",
     "assignDataFilesToRun": "runs-files",
     "assignFilesToRunsByName": "runs-files",
@@ -72,6 +75,8 @@ ALLOWED_OPS: dict[str, WizardStepId] = {
     "setInstrument": "protocol",
     "setCleavageAgent": "protocol",
     "setModifications": "protocol",
+    "setPrecursorMassTolerance": "protocol",
+    "setFragmentMassTolerance": "protocol",
 }
 
 # Reverse index of ALLOWED_OPS, so the prompt can show only the operations that
@@ -152,6 +157,9 @@ class FactorInfo(BaseModel):
 
     name: str
     values: list[str] = Field(default_factory=list)
+    scope: Literal["sample", "run"] = "sample"
+    sourceCharacteristic: str | None = None
+    reasoning: str | None = None
 
 
 class MsRunSummary(BaseModel):
@@ -159,6 +167,10 @@ class MsRunSummary(BaseModel):
 
     name: str
     sampleSourceNames: list[str] = Field(default_factory=list)
+    labelConfigId: str | None = None
+    channels: list[dict[str, Any]] = Field(default_factory=list)
+    files: list[dict[str, Any]] = Field(default_factory=list)
+    factorValues: dict[str, str] = Field(default_factory=dict)
 
 
 class WizardSnapshot(BaseModel):
@@ -176,6 +188,7 @@ class WizardSnapshot(BaseModel):
     characteristicChoices: dict[str, list[str]] = Field(default_factory=dict)
     # Step 3 (Sample Values) live state — mirrors what the wizard asks the user to fill.
     sampleSourceNames: list[str] = Field(default_factory=list)
+    factorValues: dict[str, str] = Field(default_factory=dict)
     biologicalReplicates: list[int] = Field(default_factory=list)
     # Characteristics columns that have 2+ candidates (shown as per-sample picks on Step 3).
     multiValueCharacteristicColumns: list[str] = Field(default_factory=list)
@@ -192,10 +205,14 @@ class WizardSnapshot(BaseModel):
     instrument: str | None = None
     cleavageAgent: str | None = None
     modifications: list[str] = Field(default_factory=list)
+    precursorMassTolerance: str = ""
+    fragmentMassTolerance: str = ""
     # Enabled factor names (legacy / short view).
     factors: list[str] = Field(default_factory=list)
     # Full factor definitions with Step-2 candidate values.
     factorDefinitions: list[FactorInfo] = Field(default_factory=list)
+    factorDecision: Literal["pending", "none"] = "pending"
+    noFactorReason: str = ""
     # Factors with 2+ candidates that need per-sample picks on Step 3.
     multiValueFactorColumns: list[str] = Field(default_factory=list)
     acquisitionMethod: str | None = None
