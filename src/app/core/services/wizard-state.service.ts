@@ -463,12 +463,13 @@ export class WizardStateService {
   /**
    * Load characteristic columns from selected sample + experiment templates.
    */
-  async refreshCharacteristicColumns(): Promise<void> {
+  async refreshCharacteristicColumns(signal?: AbortSignal): Promise<void> {
     const state = this._state();
     const result = await this.templateService.getWizardCharacteristicColumns({
       sampleTemplate: getSampleTemplateId(state),
       experimentTemplates: state.experimentTemplates || [],
     });
+    signal?.throwIfAborted();
 
     const meta: WizardCharacteristicColumnMeta[] = result.all.map(c => ({
       name: c.name,

@@ -49,7 +49,7 @@ const LAYER_LABEL: Record<LayerKind, string> = {
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     @for (group of groups(); track group.step) {
-      <section class="group">
+      <section class="group" [attr.inert]="disabled() ? '' : null" [attr.aria-busy]="disabled()">
         <header class="group-head">
           <span class="step-pill">
             <span class="step-num">{{ group.stepIndex + 1 }}</span>
@@ -126,7 +126,7 @@ const LAYER_LABEL: Record<LayerKind, string> = {
                 <button class="dismiss" (click)="dismiss.emit(card)">Dismiss</button>
                 <button class="apply" [disabled]="!!importDependency(card)" (click)="apply.emit(card)">Apply</button>
               } @else if (card.status === 'applied') {
-                <span class="state applied">Applied</span>
+                <span class="state applied">{{ card.autoApplied ? 'Auto-applied' : 'Applied' }}</span>
                 <button class="apply secondary" (click)="apply.emit(card)" title="Apply this suggestion again">
                   Re-apply
                 </button>
@@ -414,6 +414,7 @@ const LAYER_LABEL: Record<LayerKind, string> = {
 })
 export class ActionCardListComponent {
   readonly cards = input<WizardActionCard[]>([]);
+  readonly disabled = input(false);
 
   readonly apply = output<WizardActionCard>();
   readonly dismiss = output<WizardActionCard>();

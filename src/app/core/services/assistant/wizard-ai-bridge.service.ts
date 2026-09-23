@@ -7,8 +7,7 @@
  *  - validate and apply one approved action (`applyAction`), plus render the
  *    before/after text the panel shows before the user approves it.
  *
- * Nothing here runs without an explicit user action: the panel calls
- * `applyAction` only when the user clicks Apply on a card.
+ * Called by manual Apply or by an explicitly started automatic annotation run.
  */
 
 import { normalizeMassTolerance } from '../../utils/mass-tolerance';
@@ -56,7 +55,7 @@ export class WizardAiBridgeService {
 
   // ------------------------------------------------------------------ snapshot
 
-  buildSnapshot(): WizardSnapshot {
+  buildSnapshot(includeAssignments = false): WizardSnapshot {
     const state = this.wizardState.getState();
     const stepIndex = this.wizardState.currentStep();
 
@@ -116,6 +115,12 @@ export class WizardAiBridgeService {
       })),
       characteristicChoices: choices,
       sampleSourceNames: (state.samples || []).map(sample => sample.sourceName),
+      ...(includeAssignments ? {
+        sampleAssignments: state.samples.map((sample, index) => ({
+          index, sourceName: sample.sourceName, biologicalReplicate: sample.biologicalReplicate,
+          characteristicValues: sample.characteristicValues || {}, factorValues: sample.factorValues || {},
+        })),
+      } : {}),
       biologicalReplicates: (state.samples || []).map(sample => sample.biologicalReplicate),
       multiValueCharacteristicColumns,
       labelConfigId: state.labelConfigId ?? null,
@@ -310,7 +315,8 @@ export class WizardAiBridgeService {
   // --------------------------------------------------------------------- apply
 
   /** Validate and apply one approved action. Throws `WizardActionError` on bad input. */
-  async applyAction(action: WizardAction): Promise<void> {
+  async applyAction(action: WizardAction, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     const args = action.args || [];
     if (['setTechnologyTemplate', 'setSampleTemplate', 'setExperimentTemplates'].includes(action.op)) {
       const names = action.op === 'setExperimentTemplates' ? asStringArray(args[0]) : [asString(args[0])];
@@ -327,17 +333,17 @@ export class WizardAiBridgeService {
     switch (action.op) {
       case 'setTechnologyTemplate':
         this.wizardState.setTechnologyTemplate(asString(args[0]));
-        await this.wizardState.refreshCharacteristicColumns();
+        await this.wizardState.refreshCharacteristicColumns(signal);
         return;
 
       case 'setSampleTemplate':
         this.wizardState.setSampleTemplate(asString(args[0]));
-        await this.wizardState.refreshCharacteristicColumns();
+        await this.wizardState.refreshCharacteristicColumns(signal);
         return;
 
       case 'setExperimentTemplates':
         this.wizardState.setExperimentTemplates(asStringArray(args[0]));
-        await this.wizardState.refreshCharacteristicColumns();
+        await this.wizardState.refreshCharacteristicColumns(signal);
         return;
 
       case 'setSampleCount':
@@ -352,7 +358,7 @@ export class WizardAiBridgeService {
         const column = asString(args[0]);
         const value = asString(args[1]);
         if (!this.wizardState.getState().characteristicColumns?.length) {
-          await this.wizardState.refreshCharacteristicColumns();
+          await this.wizardState.refreshCharacteristicColumns(signal);
         }
         this.wizardState.addCharacteristicChoice(column, value, optionalOntologyTerm(args[2]));
         return;

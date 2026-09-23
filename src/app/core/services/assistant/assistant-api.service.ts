@@ -183,7 +183,8 @@ export class AssistantApiService {
     }
 
     this.abort();
-    this.controller = new AbortController();
+    const controller = new AbortController();
+    this.controller = controller;
 
     let response: Response;
     try {
@@ -191,9 +192,10 @@ export class AssistantApiService {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
         body: JSON.stringify(request),
-        signal: this.controller.signal,
+        signal: controller.signal,
       });
     } catch (error) {
+      if (controller.signal.aborted) return;
       yield { type: 'error', text: `Could not reach the assistant backend: ${describeError(error)}` };
       return;
     }
@@ -231,7 +233,7 @@ export class AssistantApiService {
       }
     } finally {
       reader.releaseLock();
-      this.controller = null;
+      if (this.controller === controller) this.controller = null;
     }
   }
 

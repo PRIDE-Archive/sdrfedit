@@ -4,8 +4,8 @@
  * Chat surface docked beside the SDRF creation wizard. The backend does the
  * reasoning and tool calling; this component streams the reply, shows the
  * evidence behind it, and turns each proposed mutation into a card the user can
- * preview and apply. Nothing touches the wizard state until the user clicks
- * Apply.
+ * preview and apply. Automatic application is available only through the explicit
+ * Auto annotate action; ordinary chat remains manual.
  *
  * The assistant advises one wizard page at a time. It picks up the step the user
  * is on, and once that step is settled it offers to move on: clicking through, or
@@ -54,6 +54,8 @@ import {
   WizardActionError,
   WizardAiBridgeService,
 } from '../../core/services/assistant/wizard-ai-bridge.service';
+import { WizardAutoAnnotationService } from '../../core/services/assistant/wizard-auto-annotation.service';
+import type { AutoTurn } from '../../core/utils/auto-annotation';
 import { WizardStateService } from '../../core/services/wizard-state.service';
 import { resolveAssistantNavigation } from '../../core/utils/wizard-navigation';
 import { ActionCardListComponent } from './action-card-list.component';
@@ -126,7 +128,7 @@ const DEFAULT_WIDTH = 400;
           >
             {{ collapsed() ? '&laquo;' : '&raquo;' }}
           </button>
-          <button class="icon-btn" (click)="close.emit()" title="Hide assistant">&times;</button>
+          <button class="icon-btn" [disabled]="autoAnnotation.active()" (click)="close.emit()" title="Hide assistant">&times;</button>
         </div>
       </header>
 
@@ -212,6 +214,39 @@ const DEFAULT_WIDTH = 400;
             </div>
           </div>
 
+          <section class="auto-annotation" aria-label="Automatic annotation">
+            <div class="auto-controls">
+              @if (autoAnnotation.active()) {
+                <button class="btn-secondary" [disabled]="autoAnnotation.stopping()" (click)="autoAnnotation.stop()">Stop auto annotation</button>
+              } @else {
+                <button class="btn-secondary" [disabled]="!canStartAuto()" (click)="startAutoAnnotation()">Auto annotate</button>
+              }
+              @if (autoAnnotation.canUndo()) {
+                <button class="btn-secondary" [disabled]="busy()" (click)="undoAutoAnnotation()">Undo auto annotation</button>
+              }
+              @if (autoAnnotation.downloadable()) {
+                <button class="btn-secondary" (click)="autoAnnotation.download()">{{ autoAnnotation.status() === 'complete' ? 'Download SDRF' : 'Download draft' }}</button>
+              }
+            </div>
+            @if (autoAnnotation.status() === 'idle') {
+              <p>Use the experiment in your message, attached paper or current conversation. Auto annotate applies new suggestions and advances through the wizard without card approval.</p>
+            } @else {
+              <p role="status" aria-live="polite">{{ autoAnnotation.resultChanged() ? 'Wizard changed since automatic annotation completed. Run again to generate and validate the latest values.' : autoAnnotation.progress() }}</p>
+              @if (autoAnnotation.active()) { <p>Wizard editing is paused during this run. Stop to return to manual editing.</p> }
+              @if (autoAnnotation.status() === 'complete' && !autoAnnotation.resultChanged()) { <p>Template validation passed; ontology lookup was skipped, as in the existing review workflow.</p> }
+              @if (autoAnnotation.issues().length) {
+                <details open><summary>Unresolved items ({{ autoAnnotation.issues().length }})</summary>
+                  <ul>@for (issue of autoAnnotation.issues(); track $index) { <li>{{ issue }}</li> }</ul>
+                </details>
+              }
+              @if (autoAnnotation.warnings().length) {
+                <details><summary>Validation warnings ({{ autoAnnotation.warnings().length }})</summary>
+                  <ul>@for (warning of autoAnnotation.warnings(); track $index) { <li>{{ warning }}</li> }</ul>
+                </details>
+              }
+            }
+          </section>
+
           <div class="messages" #scroller (scroll)="onMessagesScroll()"
             (wheel)="onMessagesWheel($event)" (touchstart)="pauseFollowing()"
             (keydown)="onMessagesKeydown($event)" tabindex="0" aria-label="Conversation">
@@ -237,7 +272,7 @@ const DEFAULT_WIDTH = 400;
               @if (message.role === 'user') {
                 @if (message.auto) {
                   <div class="step-divider">
-                    <span>{{ message.content }}</span>
+                    <span>{{ message.autoLabel || message.content }}</span>
                   </div>
                 } @else if (message.attachment) {
                   <div class="user-row">
@@ -344,6 +379,7 @@ const DEFAULT_WIDTH = 400;
                   @if (!message.pending && cardsFor(message).length) {
                     <assistant-action-cards
                       [cards]="cardsFor(message)"
+                      [disabled]="autoAnnotation.active()"
                       (apply)="apply($event)"
                       (dismiss)="dismiss($event)"
                       (applyAll)="applyMany($event)"
@@ -529,6 +565,11 @@ const DEFAULT_WIDTH = 400;
     </aside>
   `,
   styles: [`
+    .auto-annotation { padding: 10px 14px; border-bottom: 1px solid #dbeafe; background: #f8fbff; font-size: 12px; max-height: 220px; overflow: auto; }
+    .auto-controls { display: flex; flex-wrap: wrap; gap: 6px; }
+    .auto-annotation p { margin: 6px 0 0; color: #475569; }
+    .auto-annotation details { margin-top: 6px; }
+    .auto-annotation ul { padding-left: 18px; }
     /*
      * The flex child of .wizard-shell is this host, not .ai-panel. Stretch the
      * host to the wizard's height so the panel doesn't float as a short card.
@@ -1391,6 +1432,9 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
   readonly history = inject(ChatHistoryService);
   private readonly bridge = inject(WizardAiBridgeService);
   readonly wizardState = inject(WizardStateService);
+  readonly autoAnnotation = inject(WizardAutoAnnotationService);
+  private viewGeneration = 0;
+  private requestSequence = 0;
 
   private readonly _messages = signal<AssistantChatMessage[]>([]);
   private readonly _cards = signal<Record<string, WizardActionCard>>({});
@@ -1406,7 +1450,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
   private readonly _renamingId = signal<string | null>(null);
 
   readonly messages = this._messages.asReadonly();
-  readonly busy = this._busy.asReadonly();
+  readonly busy = computed(() => this._busy() || this.autoAnnotation.active());
   readonly collapsed = this._collapsed.asReadonly();
   readonly composerFile = this._composerFile.asReadonly();
   readonly panelWidth = this._width.asReadonly();
@@ -1499,6 +1543,9 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.viewGeneration++;
+    this.autoAnnotation.stop();
+    this.api.abort();
     if (this.scrollFrame !== null) cancelAnimationFrame(this.scrollFrame);
     if (this.persistTimer) {
       clearTimeout(this.persistTimer);
@@ -1568,7 +1615,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
   }
 
   newChat(): void {
-    if (this._busy()) return;
+    if (this.busy()) return;
     this.persistActive();
     const session = this.history.create(createSessionId());
     this.loadSession(session.id);
@@ -1576,7 +1623,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
   }
 
   openChat(id: string): void {
-    if (this._busy() || id === this.history.activeId()) {
+    if (this.busy() || id === this.history.activeId()) {
       this._historyOpen.set(false);
       return;
     }
@@ -1586,7 +1633,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
   }
 
   deleteChat(id: string): void {
-    if (this._busy()) return;
+    if (this.busy()) return;
     const wasActive = id === this.history.activeId();
     this.history.remove(id);
     if (wasActive) {
@@ -1645,7 +1692,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
   }
 
   canSend(): boolean {
-    if (this._busy()) return false;
+    if (this.busy()) return false;
     const file = this._composerFile();
     if (file?.status === 'parsing') return false;
     if (file?.status === 'ready') return true;
@@ -1659,6 +1706,9 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
   }
 
   private loadSession(id: string): void {
+    if (this.autoAnnotation.active()) return;
+    this.viewGeneration++;
+    this.autoAnnotation.clear();
     const session = this.history.select(id);
     if (!session) return;
     this.loadingSession = true;
@@ -1782,6 +1832,8 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
   }
 
   stop(): void {
+    if (this.autoAnnotation.active()) { this.autoAnnotation.stop(); return; }
+    this.requestSequence++;
     this.api.abort();
     this._busy.set(false);
     this.patchLast(message => ({ ...message, pending: false, status: undefined,
@@ -1817,6 +1869,88 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
 
   // -------------------------------------------------------------- step driving
 
+  canStartAuto(): boolean {
+    return !this.busy() && !this.applyingCard && this.composerFile()?.status !== 'parsing'
+      && (!!this.draft.trim() || this.composerFile()?.status === 'ready'
+        || this.messages().some(message => message.role === 'user')
+        || !!this.wizardState.getState().experimentDescription.trim() || !!this.accession());
+  }
+
+  async startAutoAnnotation(): Promise<void> {
+    if (!this.canStartAuto()) return;
+    const initial = this.draft.trim();
+    const attachment = this.composerFile()?.status === 'ready' ? this.composerFile()! : undefined;
+    const slash = parseSlashCommand(initial);
+    const previousSkill = !initial ? [...this.messages()].reverse().find(message => message.skill)?.skill : undefined;
+    const sourceContext = initial || previousSkill?.args || '';
+    const accession = slash?.accession || sourceContext.match(/\bPXD\d+\b/i)?.[0]?.toUpperCase() || this.accession();
+    const skill = slash ? { name: slash.name, args: slash.args || undefined }
+      : previousSkill || (accession ? { name: 'sdrf-annotate', args: accession } : undefined);
+    const generation = this.viewGeneration;
+    this.draft = '';
+    this._composerFile.set(null);
+    this._slashHintsVisible.set(false);
+    this.queuedStep = null;
+    let first = true;
+    this.markAdvised(5);
+    await this.autoAnnotation.start({
+      abort: () => this.api.abort(),
+      request: async (step, feedback, runId) => {
+        if (generation !== this.viewGeneration) throw new Error('Conversation changed.');
+        const file = first ? attachment : undefined;
+        first = false;
+        const prompt = [initial ? `Annotation request: ${initial}` : '',
+          attachment ? `Use uploaded documentId ${attachment.documentId} (${attachment.fileName}).` : '',
+          `Automatically complete step ${step + 1}: ${WIZARD_STEPS[step].title}. Use current evidence and preserve correct existing values. Return actions and an automation completion report.`,
+          feedback.length ? `Previous execution/validation issues:\n${feedback.join('\n')}\nUse the CURRENT snapshot to repair these issues. Failed action batches were rolled back.` : '',
+        ].filter(Boolean).join('\n\n');
+        const result = await this.send(prompt, {
+          focusStep: WIZARD_STEPS[step].id as AssistantStepId, mode: 'step', auto: true,
+          autoLabel: `${feedback.length ? 'Auto repair' : 'Auto annotation'} · Step ${step + 1}: ${WIZARD_STEPS[step].title}`,
+          attachment: file, skill, accession, automationRunId: runId,
+        });
+        if (!result) throw new Error('Could not start automatic assistant turn.');
+        return result;
+      },
+      record: (cards, applied, error) => {
+        if (generation !== this.viewGeneration) return;
+        this._cards.update(map => {
+          const next = { ...map };
+          for (const card of cards) next[card.id] = {
+            ...card, status: applied ? 'applied' : 'failed', autoApplied: applied,
+            error, // Keep the before/after preview captured before this batch.
+          };
+          return next;
+        });
+        this.persistActive();
+      },
+    });
+    if (generation === this.viewGeneration) {
+      this.queuedStep = null;
+      this._messages.update(messages => [...messages, {
+        role: 'assistant',
+        content: [this.autoAnnotation.progress(), ...this.autoAnnotation.issues(),
+          ...this.autoAnnotation.warnings().map(warning => `Warning: ${warning}`)].join('\n\n'),
+      }]);
+      this.persistActive();
+    }
+  }
+
+  undoAutoAnnotation(): void {
+    if (this.busy()) return;
+    // Restoring the original step must not trigger a manual advisory request.
+    this.loadingSession = true;
+    const runId = this.autoAnnotation.undo();
+    if (runId) {
+      this._cards.update(map => Object.fromEntries(Object.entries(map).map(([id, card]) => [id,
+        card.automationRunId === runId ? { ...card, status: 'dismissed' as const, autoApplied: false, error: undefined } : card,
+      ])));
+      this.markAdvised(this.wizardState.currentStep());
+      this.persistActive();
+    }
+    this.loadingSession = false;
+  }
+
   /** The step strip button: advise on the page currently open. */
   adviseCurrentStep(): void {
     void this.adviseStep(this.wizardState.currentStep(), { force: true });
@@ -1824,6 +1958,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
 
   /** The "Continue" button under a turn: move the wizard on, then advise. */
   goNext(hint: AssistantNextStep): void {
+    if (this.autoAnnotation.active()) return;
     const currentStep = this.wizardState.currentStep();
     const decision = resolveAssistantNavigation(
       currentStep,
@@ -1841,7 +1976,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
   private onStepChanged(step: number): void {
     // Nothing to advise on before the user has started a conversation: there is no
     // evidence yet, and an unprompted turn would just be noise.
-    if (this.loadingSession) return;
+    if (this.loadingSession || this.autoAnnotation.active()) return;
     if (this._messages().length === 0) return;
     if (this._advisedSteps().has(step)) return;
     if (this._busy()) {
@@ -1853,7 +1988,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
 
   private async adviseStep(step: number, options: { force?: boolean } = {}): Promise<void> {
     const config = WIZARD_STEPS[step];
-    if (!config || this._busy()) return;
+    if (!config || this.busy()) return;
     if (!options.force && this._advisedSteps().has(step)) return;
 
     await this.send(`Now help me with step ${step + 1}: ${config.title}.`, {
@@ -1875,14 +2010,20 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
       focusStep?: AssistantStepId;
       mode?: 'chat' | 'step';
       auto?: boolean;
+      autoLabel?: string;
       attachment?: AssistantAttachment;
       skill?: AssistantSkillRef;
       /** Prompt sent to the model when the UI shows a card/chip instead. */
       modelPrompt?: string;
       accession?: string | null;
+      automationRunId?: string;
     } = {}
-  ): Promise<void> {
-    if (this._busy()) return;
+  ): Promise<AutoTurn | undefined> {
+    if (this._busy() || (this.autoAnnotation.active() && !options.automationRunId)) return;
+    const generation = this.viewGeneration;
+    const requestSequence = ++this.requestSequence;
+    let automaticTurn: AutoTurn | undefined;
+    let streamError: string | undefined;
 
     // Pick up a ready file from the DeepSeek-style composer when the user hits Send.
     let attachment = options.attachment;
@@ -1926,6 +2067,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
         role: 'user',
         content: content || uploadPrompt,
         auto: options.auto,
+        ...(options.autoLabel ? { autoLabel: options.autoLabel } : {}),
         attachment,
         skill,
       },
@@ -1954,15 +2096,17 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
       const stream = this.api.streamChat({
         sessionId: this.sessionId,
         messages: chatHistory,
-        wizardState: this.bridge.buildSnapshot(),
+        wizardState: this.bridge.buildSnapshot(!!options.automationRunId),
         accession: options.accession ?? slash?.accession ?? this.accession(),
         focusStep,
         mode: options.mode || 'chat',
+        ...(options.automationRunId ? { executionMode: 'auto' as const } : {}),
         skill: skill?.name,
         skillArgs: skill?.args || slash?.args || null,
       });
 
       for await (const event of stream) {
+        if (generation !== this.viewGeneration || requestSequence !== this.requestSequence) break;
         switch (event.type) {
           case 'thinking':
             this.patchLast(message => ({ ...message,
@@ -1992,7 +2136,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
             });
             break;
           case 'actions':
-            this.registerActions(event.actions);
+            if (!options.automationRunId) this.registerActions(event.actions);
             break;
           case 'citations':
             this.patchLast(message => ({ ...message, citations: event.citations }));
@@ -2001,6 +2145,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
             this.patchLast(message => ({ ...message, nextStep: event.nextStep }));
             break;
           case 'error':
+            streamError = event.text;
             this.patchLast(message => ({
               ...message,
               error: event.text,
@@ -2009,37 +2154,50 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
             }));
             break;
           case 'done':
+            if (options.automationRunId) {
+              automaticTurn = {
+                cards: this.registerActions(event.result.actions, options.automationRunId),
+                report: event.result.automation,
+              };
+            }
             this.patchLast(message => finalizeTurn(message, event.result));
             break;
         }
         this.scrollToBottom();
       }
     } finally {
-      this._busy.set(false);
-      this.patchLast(message => ({
-        ...message,
-        pending: false,
-        status: undefined,
-        timeline: clearRunningTools(message.timeline || []),
-      }));
-      this.persistActive();
-      this.scrollToBottom();
-      this.flushQueuedStep();
+      if (generation === this.viewGeneration && requestSequence === this.requestSequence) {
+        this._busy.set(false);
+        this.patchLast(message => ({
+          ...message,
+          pending: false,
+          status: undefined,
+          timeline: clearRunningTools(message.timeline || []),
+        }));
+        this.persistActive();
+        this.scrollToBottom();
+        this.flushQueuedStep();
+      }
     }
+    if (options.automationRunId && (streamError || !automaticTurn)) {
+      throw new Error(streamError || 'Assistant stream ended before completion; no actions were applied.');
+    }
+    return automaticTurn;
   }
 
   private flushQueuedStep(): void {
     const step = this.queuedStep;
     this.queuedStep = null;
-    if (step !== null && step === this.wizardState.currentStep()) void this.adviseStep(step);
+    if (!this.autoAnnotation.active() && step !== null && step === this.wizardState.currentStep()) void this.adviseStep(step);
   }
 
-  private registerActions(actions: WizardAction[]): void {
-    if (!actions.length) return;
+  private registerActions(actions: WizardAction[], automationRunId?: string): WizardActionCard[] {
+    if (!actions.length) return [];
 
     const created: WizardActionCard[] = actions.map(action => ({
       id: `action_${++this.cardSequence}`,
       action,
+      ...(automationRunId ? { automationRunId } : {}),
       status: 'pending',
       preview: this.bridge.previewAction(action),
     }));
@@ -2054,6 +2212,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
       actionIds: [...(message.actionIds || []), ...created.map(card => card.id)],
     }));
     this.persistActive();
+    return created;
   }
 
   private patchLast(update: (message: AssistantChatMessage) => AssistantChatMessage): void {
@@ -2122,7 +2281,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
   private applyingCard = false;
 
   async apply(card: WizardActionCard): Promise<void> {
-    if (this.applyingCard) return;
+    if (this.applyingCard || this.autoAnnotation.active()) return;
     if (card.status === 'failed') {
       await this.send(`Repair the failed suggestion "${card.action.label}" using the CURRENT wizard snapshot. Error: ${card.error || 'application failed'}. Original action: ${JSON.stringify(card.action)}. Propose a corrected plan; do not repeat references to missing groups.`, { focusStep: card.action.step });
       return;
@@ -2144,6 +2303,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
   }
 
   dismiss(card: WizardActionCard): void {
+    if (this.autoAnnotation.active()) return;
     this.updateCard(card.id, { status: 'dismissed', preview: this.bridge.previewAction(card.action) });
   }
 
@@ -2189,7 +2349,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
     input.value = '';
-    if (!file || this._busy() || this._composerFile()?.status === 'parsing') return;
+    if (!file || this.busy() || this._composerFile()?.status === 'parsing') return;
 
     const sizeLabel = formatFileSizeLabel(file);
     this._composerFile.set({

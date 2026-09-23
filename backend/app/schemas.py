@@ -188,6 +188,7 @@ class WizardSnapshot(BaseModel):
     characteristicChoices: dict[str, list[str]] = Field(default_factory=dict)
     # Step 3 (Sample Values) live state — mirrors what the wizard asks the user to fill.
     sampleSourceNames: list[str] = Field(default_factory=list)
+    sampleAssignments: list[dict[str, Any]] = Field(default_factory=list)
     factorValues: dict[str, str] = Field(default_factory=dict)
     biologicalReplicates: list[int] = Field(default_factory=list)
     # Characteristics columns that have 2+ candidates (shown as per-sample picks on Step 3).
@@ -218,6 +219,11 @@ class WizardSnapshot(BaseModel):
     acquisitionMethod: str | None = None
 
 
+class AutomationReport(BaseModel):
+    status: Literal["ready", "blocked"]
+    issues: list[str] = Field(default_factory=list)
+
+
 class ChatRequest(BaseModel):
     sessionId: str
     messages: list[ChatMessageIn]
@@ -230,6 +236,7 @@ class ChatRequest(BaseModel):
     # "step" means the panel asked for this turn because the user moved to a new
     # wizard step; "chat" means the user typed something.
     mode: Literal["chat", "step"] = "chat"
+    executionMode: Literal["manual", "auto"] = "manual"
     # Named skill the panel resolved from a slash command (e.g. sdrf-annotate).
     skill: str | None = None
     skillArgs: str | None = None
@@ -244,6 +251,7 @@ class ChatResult(BaseModel):
     toolCalls: list[ToolInvocation] = Field(default_factory=list)
     nextStep: NextStepHint | None = None
     needsUserInput: str | None = None
+    automation: AutomationReport | None = None
     # Debug payload for the panel's downloadable agent trace.
     trace: dict[str, Any] | None = None
 

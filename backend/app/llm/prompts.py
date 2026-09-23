@@ -13,6 +13,8 @@ small enough to leave room for the evidence.
 
 from __future__ import annotations
 
+import json
+
 from ..schemas import OPS_BY_STEP, STEP_ORDER, STEP_TITLES, WizardSnapshot, WizardStepId
 
 WIZARD_STEPS_DOC = """The Create New SDRF wizard has 6 steps (new layered UI):
@@ -706,6 +708,9 @@ def render_wizard_context(snapshot: WizardSnapshot | None) -> str:
             f"- biological replicates ({len(snapshot.biologicalReplicates)}, "
             f"{unique} distinct): [{preview}]"
         )
+    if snapshot.sampleAssignments:
+        lines.append("- existing per-sample assignments (zero-based action indices; preserve correct values): "
+                     + json.dumps(snapshot.sampleAssignments, ensure_ascii=False))
     if snapshot.multiValueCharacteristicColumns:
         lines.append(
             "- multi-value characteristics (need per-sample values on Step 3): "

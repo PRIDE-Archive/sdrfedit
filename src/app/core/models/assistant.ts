@@ -46,6 +46,14 @@ export interface WizardActionCard {
   status: 'pending' | 'applied' | 'dismissed' | 'failed';
   preview: string;
   error?: string;
+  /** Present only on cards owned by an explicit automatic annotation run. */
+  automationRunId?: string;
+  autoApplied?: boolean;
+}
+
+export interface AutomationReport {
+  status: 'ready' | 'blocked';
+  issues: string[];
 }
 
 /** One tool call in the timeline — may still be running. */
@@ -104,6 +112,8 @@ export interface AssistantChatMessage {
   content: string;
   /** True when the panel asked on the user's behalf after a step change. */
   auto?: boolean;
+  /** Short label for an automatic turn; content remains the full model context. */
+  autoLabel?: string;
   /** Uploaded file card (UI); `content` still holds the prompt sent to the model. */
   attachment?: AssistantAttachment;
   /** Slash skill chip (UI), e.g. /sdrf-annotate PXD000547. */
@@ -168,6 +178,14 @@ export interface WizardSnapshot {
   characteristicChoices: Record<string, string[]>;
   /** Current source names in wizard order (Step 3). */
   sampleSourceNames?: string[];
+  /** Detailed assignments are sent only by automatic runs, to preserve existing edits. */
+  sampleAssignments?: {
+    index: number;
+    sourceName: string;
+    biologicalReplicate: number;
+    characteristicValues: Record<string, string>;
+    factorValues: Record<string, string>;
+  }[];
   /** Current biological replicate numbers in wizard order (Step 3). */
   biologicalReplicates?: number[];
   /** Columns with 2+ Step-2 candidates that need per-sample values on Step 3. */
@@ -210,6 +228,7 @@ export interface AssistantChatRequest {
   focusStep?: AssistantStepId;
   /** `step` when the panel asked on the user's behalf after a step change. */
   mode?: 'chat' | 'step';
+  executionMode?: 'manual' | 'auto';
   /** Named skill resolved from a slash command. */
   skill?: string | null;
   skillArgs?: string | null;
@@ -234,6 +253,7 @@ export type AssistantStreamEvent =
         citations: AssistantCitation[];
         toolCalls: AssistantToolCall[];
         nextStep: AssistantNextStep | null;
+        automation?: AutomationReport | null;
         trace?: Record<string, unknown> | null;
       };
     };

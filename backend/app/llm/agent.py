@@ -40,6 +40,7 @@ from .prompts import (
     render_step_focus,
     render_wizard_context,
 )
+from .auto_annotation import AUTO_ANNOTATION_PROMPT, automatic_proposal_tool, parse_automation_report
 from .thinking import ThinkingSplitter
 from .setup_gate import SetupGate, MAX_SAMPLE_COUNT
 
@@ -156,6 +157,9 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
     if accession:
         system_parts.append(f"The panel reports the user is working with accession {accession}.")
 
+    if request.executionMode == "auto":
+        system_parts.append(AUTO_ANNOTATION_PROMPT)
+
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": "\n\n".join(part for part in system_parts if part.strip())}
     ]
@@ -174,7 +178,9 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
             content = skill.user_prompt
         messages.append({"role": message.role, "content": content})
 
-    tools = [*registry.openai_tool_specs(), PROPOSE_ACTIONS_TOOL]
+    proposal_tool = automatic_proposal_tool() if request.executionMode == "auto" else PROPOSE_ACTIONS_TOOL
+    tools = [*registry.openai_tool_specs(), proposal_tool]
+    automation_report = None
     latest_user = next((m.content.strip().rstrip('.。').lower() for m in reversed(request.messages) if m.role == "user"), "")
     pride_only = latest_user in {"continue with pride metadata only", "仅使用pride元数据继续", "仅使用 pride 元数据继续"}
     explicit_documents = [doc.document_id for doc in store.list_for_session(request.sessionId) if doc.document_id in latest_user]
@@ -279,6 +285,8 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
                         verified_labels,
                     )
                     rejected.extend(gate_rejected)
+                    if request.executionMode == "auto":
+                        automation_report = parse_automation_report(call.arguments, rejected + deferred)
                     propose_rejected.extend(rejected)
                     propose_deferred.extend(deferred)
                     collected_actions.extend(actions)
@@ -371,7 +379,7 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
             closing_calls: list[ToolCall] = []
             closing_splitter = ThinkingSplitter()
             yield AgentEvent.status("Thinking…")
-            async for event in client.stream(messages, tools=[PROPOSE_ACTIONS_TOOL]):
+            async for event in client.stream(messages, tools=[proposal_tool]):
                 if event.type == "token":
                     visible = closing_splitter.feed(event.text)
                     reasoning = closing_splitter.take_reasoning()
@@ -436,6 +444,8 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
                         verified_labels,
                     )
                     rejected.extend(gate_rejected)
+                    if request.executionMode == "auto":
+                        automation_report = parse_automation_report(call.arguments, rejected + deferred)
                     propose_rejected.extend(rejected)
                     propose_deferred.extend(deferred)
                     collected_actions.extend(actions)
@@ -490,6 +500,7 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
             ChatResult(
                 content="\n\n".join(part.strip() for part in answer_parts if part.strip()),
                 actions=collected_actions,
+                automation=automation_report,
                 citations=collected_citations,
                 toolCalls=collected_tools,
                 nextStep=hint,

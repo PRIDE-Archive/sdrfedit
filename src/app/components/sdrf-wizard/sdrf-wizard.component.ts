@@ -18,6 +18,7 @@ import { CommonModule } from '@angular/common';
 
 import { WizardStateService } from '../../core/services/wizard-state.service';
 import { ChatHistoryService } from '../../core/services/assistant/chat-history.service';
+import { WizardAutoAnnotationService } from '../../core/services/assistant/wizard-auto-annotation.service';
 import { SdrfTable } from '../../core/models/sdrf-table';
 import { WizardGeneratorService } from '../../core/services/wizard-generator.service';
 import { TemplateService } from '../../core/services/template.service';
@@ -62,12 +63,12 @@ import { WizardAiPanelComponent } from '../wizard-ai-panel/wizard-ai-panel.compo
                 Ask AI
               </button>
             }
-            <button class="btn-close" (click)="onCancel()" title="Close">&times;</button>
+            <button class="btn-close" [disabled]="autoAnnotation.active()" (click)="onCancel()" title="Close">&times;</button>
           </div>
         </div>
 
         <!-- Progress Steps -->
-        <div class="wizard-progress">
+        <div class="wizard-progress" [attr.inert]="autoAnnotation.active() ? '' : null">
           @for (step of wizardState.steps; track step.id; let i = $index) {
             <button
               class="step-indicator"
@@ -93,7 +94,7 @@ import { WizardAiPanelComponent } from '../wizard-ai-panel/wizard-ai-panel.compo
         </div>
 
         <!-- Step Content -->
-        <div class="wizard-content">
+        <div class="wizard-content" [attr.inert]="autoAnnotation.active() ? '' : null" [attr.aria-busy]="autoAnnotation.active()">
           @switch (wizardState.currentStep()) {
             @case (0) {
               <wizard-experiment-setup
@@ -123,7 +124,7 @@ import { WizardAiPanelComponent } from '../wizard-ai-panel/wizard-ai-panel.compo
         </div>
 
         <!-- Footer Navigation -->
-        <div class="wizard-footer">
+        <div class="wizard-footer" [attr.inert]="autoAnnotation.active() ? '' : null">
           <button
             class="btn btn-secondary"
             [disabled]="!wizardState.canGoBack()"
@@ -476,6 +477,7 @@ export class SdrfWizardComponent implements OnInit {
   readonly showAiPanel = signal(!isMobileViewport());
 
   readonly wizardState = inject(WizardStateService);
+  readonly autoAnnotation = inject(WizardAutoAnnotationService);
   private readonly generator = inject(WizardGeneratorService);
   readonly templateService = inject(TemplateService);
   private readonly chatHistory = inject(ChatHistoryService);
@@ -491,12 +493,15 @@ export class SdrfWizardComponent implements OnInit {
   }
 
   goToStep(step: number): void {
+    if (this.autoAnnotation.active()) return;
     if (step <= this.wizardState.currentStep()) {
       this.wizardState.goToStep(step);
     }
   }
 
   onCancel(): void {
+    if (this.autoAnnotation.active()) return;
+    this.autoAnnotation.clear();
     // Explicit dismiss — drop the draft so reopen starts clean. Chat text remains.
     this.chatHistory.clearActiveWizard();
     this.wizardState.reset();
@@ -504,11 +509,14 @@ export class SdrfWizardComponent implements OnInit {
   }
 
   onCreateClick(): void {
+    if (this.autoAnnotation.active()) return;
     const table = this.generator.generate(this.wizardState.getState());
     this.onCreate(table);
   }
 
   onCreate(table: SdrfTable): void {
+    if (this.autoAnnotation.active()) return;
+    this.autoAnnotation.clear();
     this.complete.emit(table);
     this.chatHistory.clearActiveWizard();
     this.wizardState.reset();
