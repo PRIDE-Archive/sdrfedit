@@ -74,7 +74,10 @@ class LlmClient:
             "messages": messages,
             "stream": True,
             "temperature": self._settings.llm_temperature if temperature is None else temperature,
+            "max_tokens": self._settings.llm_max_tokens,
         }
+        if self._settings.llm_enable_thinking is not None:
+            body["chat_template_kwargs"] = {"enable_thinking": self._settings.llm_enable_thinking}
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"

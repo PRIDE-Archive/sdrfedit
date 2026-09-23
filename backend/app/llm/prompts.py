@@ -349,6 +349,14 @@ The panel shows a "Thinking…" indicator for the <think> block and only display
 what comes after it, so keep the final answer itself short and direct — it is the
 only part the user actually reads.
 
+Match the length of your thinking to the question. A simple factual or spec
+lookup, a yes/no, or anything answerable without a tool call needs at most one
+or two short sentences of thinking, not a multi-paragraph deliberation. Reserve
+longer reasoning for turns that actually gather or cross-check evidence (tool
+calls, multi-field proposals). Thinking has a hard token budget shared with your
+answer — if you run long, you get cut off before you ever answer, so stop
+reasoning and write the answer as soon as you know it.
+
 {WIZARD_STEPS_DOC}
 
 You work through the wizard one step at a time, alongside the user. Each turn you

@@ -34,6 +34,21 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.2
     llm_max_tool_rounds: int = 16
     llm_timeout_seconds: float = 120.0
+    # Explicit cap per round so a reasoning model's <think> block can't eat the
+    # whole generation budget on a gateway default we don't control -- without
+    # this, client.py sent no max_tokens at all (see CUTOFF_FALLBACK_MESSAGE
+    # in agent.py, which fires when a round hits that cap mid-thought).
+    llm_max_tokens: int = 4096
+    # vLLM/Qwen-specific: forwarded as chat_template_kwargs.enable_thinking
+    # when not None. Verified against the deployed Qwen/Qwen3.6-27B-FP8: with
+    # it False, the model skips its narrated "Here's a thinking process..."
+    # preamble entirely (confirmed tool-calling still works correctly) --
+    # False also fixes the false-positive cutoff, since that preamble never
+    # closes with a literal </think> tag on this model, so a long-but-complete
+    # answer was being mistaken for a truncated one. Left as None (omit the
+    # field) by default because non-vLLM providers (plain OpenAI, etc.) can
+    # reject an unrecognized top-level request field.
+    llm_enable_thinking: bool | None = None
 
     embedding_base_url: str = "https://api.openai.com/v1"
     embedding_api_key: str = ""

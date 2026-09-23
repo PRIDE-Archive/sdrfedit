@@ -46,24 +46,26 @@ PROPOSE_TOOL_NAME = "propose_wizard_actions"
 
 # A round can end with a ThinkingSplitter that never saw </think> for two very
 # different reasons: the model answered directly (short, legitimate), or it
-# was still mid-thought when cut off by the token cap (observed in testing --
-# the model can spiral into repetitive reasoning for thousands of tokens
-# before ever closing the block). Length is the only signal available to
-# tell them apart; a genuine direct answer is nowhere near this long.
-MAX_UNCLOSED_THINKING_CHARS = 800
+# was still mid-thought when cut off by the token cap. Text length alone can't
+# tell them apart -- some models (verified against the deployed Qwen3.6) never
+# emit a literal </think> at all and just narrate a long-but-complete answer,
+# which a length guess would misclassify as a cutoff. finish_reason from the
+# API is the authoritative signal: "length" means the server actually stopped
+# generation for hitting max_tokens, not that the model chose to stop.
 CUTOFF_FALLBACK_MESSAGE = (
     "Sorry, that took too long to think through and got cut off. Could you try again?"
 )
 
 
-def _resolve_round_text(text: str, saw_close_tag: bool) -> str:
+def _resolve_round_text(text: str, saw_close_tag: bool, finish_reason: str | None) -> str:
     """Guard against dumping a runaway, unclosed <think> block on the user.
 
-    Only applies when </think> was never seen this round -- text that
-    already streamed after a genuine close tag is never touched here,
-    however long it legitimately is.
+    Only applies when </think> was never seen this round AND the API confirms
+    generation was actually cut off for length -- text that already streamed
+    after a genuine close tag is never touched here, however long it
+    legitimately is, and neither is a long-but-complete answer.
     """
-    if not saw_close_tag and len(text) > MAX_UNCLOSED_THINKING_CHARS:
+    if not saw_close_tag and finish_reason == "length":
         return CUTOFF_FALLBACK_MESSAGE
     return text
 
@@ -213,6 +215,7 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
             round_text: list[str] = []
             calls: list[ToolCall] = []
             splitter = ThinkingSplitter()
+            round_finish_reason: str | None = None
             yield AgentEvent.status("Thinking…")
 
             async for event in client.stream(messages, tools):
@@ -223,7 +226,9 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
                         yield AgentEvent.token(visible)
                 elif event.type == "tool_calls":
                     calls = event.tool_calls
-            trailing = _resolve_round_text(splitter.flush(), splitter.saw_close_tag)
+                elif event.type == "done":
+                    round_finish_reason = event.finish_reason
+            trailing = _resolve_round_text(splitter.flush(), splitter.saw_close_tag, round_finish_reason)
             if trailing:
                 round_text.append(trailing)
                 yield AgentEvent.token(trailing)
@@ -353,6 +358,7 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
             closing_text: list[str] = []
             closing_calls: list[ToolCall] = []
             closing_splitter = ThinkingSplitter()
+            closing_finish_reason: str | None = None
             yield AgentEvent.status("Thinking…")
             async for event in client.stream(messages, tools=[PROPOSE_ACTIONS_TOOL]):
                 if event.type == "token":
@@ -362,7 +368,11 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
                         yield AgentEvent.token(visible)
                 elif event.type == "tool_calls":
                     closing_calls = event.tool_calls
-            trailing = _resolve_round_text(closing_splitter.flush(), closing_splitter.saw_close_tag)
+                elif event.type == "done":
+                    closing_finish_reason = event.finish_reason
+            trailing = _resolve_round_text(
+                closing_splitter.flush(), closing_splitter.saw_close_tag, closing_finish_reason
+            )
             if trailing:
                 closing_text.append(trailing)
                 yield AgentEvent.token(trailing)

@@ -26,6 +26,17 @@ data:
   LLM_TEMPERATURE: "0.2"
   LLM_MAX_TOOL_ROUNDS: "16"
   LLM_TIMEOUT_SECONDS: "120"
+  # Qwen3.6 is a native "thinking" model; without an explicit cap here the
+  # gateway's own default applied instead, and a runaway <think> block would
+  # get cut off before ever answering (CUTOFF_FALLBACK_MESSAGE in agent.py).
+  LLM_MAX_TOKENS: "4096"
+  # Verified directly against this gateway/model (2026-09-22): Qwen3.6 never
+  # wraps its reasoning in a literal <think> tag -- it narrates a full
+  # "Here's a thinking process: 1... 2... 3..." preamble as plain answer text,
+  # even for trivial questions, and even when told to use the tag. Setting
+  # this false via chat_template_kwargs skips that preamble entirely (tool
+  # calling still selects the right tool/args correctly with it off).
+  LLM_ENABLE_THINKING: "false"
 
   # ---------- Embeddings ----------
   # Not wired to a real provider yet (degrades to lexical-only retrieval --
