@@ -57,7 +57,8 @@ class Settings(BaseSettings):
     cellline_synonyms_file: str = "../sdrf-proteomics/ai-synonyms.tsv"
     cellline_index_dir: str = "data/cellline_index"
 
-    unpaywall_email: str = ""
+    scihub_base_url: str = "https://www.sci-hub.ee/"
+    scihub_trust_env: bool = False
     publication_cache_dir: str = "data/publications"
     publication_cache_ttl_seconds: int = 604800
     publication_cache_max_mb: int = 256

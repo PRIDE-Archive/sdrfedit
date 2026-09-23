@@ -18,7 +18,7 @@ XML = b'''<article xmlns:xlink="http://www.w3.org/1999/xlink"><front><article-me
 
 
 def configure(monkeypatch, tmp_path):
-    settings = Settings(_env_file=None, publication_cache_dir=str(tmp_path), unpaywall_email="")
+    settings = Settings(_env_file=None, publication_cache_dir=str(tmp_path), scihub_base_url="https://mirror.example/")
     monkeypatch.setattr(publication_cache, "get_settings", lambda: settings)
     monkeypatch.setattr(literature, "get_settings", lambda: settings)
     return settings
@@ -47,17 +47,62 @@ def test_conflicting_identifiers_do_not_download(monkeypatch, tmp_path):
     assert not result["found"]
 
 
-def test_unpaywall_works_without_epmc_record(monkeypatch, tmp_path):
-    settings = configure(monkeypatch, tmp_path)
-    settings.unpaywall_email = "maintainer@example.org"
-    monkeypatch.setattr(literature, "get_json", AsyncMock(side_effect=[
-        {"resultList": {"result": []}},
-        {"best_oa_location": {"url_for_landing_page": "https://publisher/paper"},
-         "oa_locations": [{"url_for_pdf": "https://repository/paper.pdf", "license": "cc-by"}]},
-    ]))
+def test_normal_lookup_does_not_contact_fallback(monkeypatch, tmp_path):
+    configure(monkeypatch, tmp_path)
+    request = AsyncMock(return_value={"resultList": {"result": []}})
+    fallback = AsyncMock()
+    monkeypatch.setattr(literature, "get_json", request)
+    monkeypatch.setattr(literature, "find_pdf_candidate", fallback)
     result = asyncio.run(literature.lookup_publication(doi="10.123/test"))
-    assert result["pdfUrls"] == ["https://repository/paper.pdf"]
-    assert result["pdfCandidates"][0]["license"] == "cc-by"
+    assert not result["pdfUrls"]
+    assert result["fallbackAvailable"]
+    assert "useFallback=true" in result["nextStep"]
+    assert request.await_count == 1
+    fallback.assert_not_awaited()
+
+
+def test_scihub_fallback_works_without_epmc_record(monkeypatch, tmp_path):
+    configure(monkeypatch, tmp_path)
+    monkeypatch.setattr(literature, "get_json", AsyncMock(return_value={"resultList": {"result": []}}))
+    fallback = AsyncMock(return_value={"url": "https://mirror.example/paper.pdf", "source": "scihub"})
+    monkeypatch.setattr(literature, "find_pdf_candidate", fallback)
+    result = asyncio.run(registry._find_publication({"doi": "https://doi.org/10.123/TEST", "useFallback": True}, "a"))
+    assert result["pdfCandidates"] == [{"url": "https://mirror.example/paper.pdf", "source": "scihub"}]
+    assert result["found"]
+    assert result["fallbackAttempted"]
+    assert not result["fallbackAvailable"]
+    assert "parse_pdf_url" in result["nextStep"]
+    fallback.assert_awaited_once_with("10.123/test", "https://mirror.example/")
+
+
+def test_fallback_does_not_repeat_primary_sources(monkeypatch, tmp_path):
+    configure(monkeypatch, tmp_path)
+    monkeypatch.setattr(literature, "get_json", AsyncMock(return_value={"resultList": {"result": [{
+        "doi": "10.123/test", "pmcid": "PMC123", "isOpenAccess": "Y",
+        "fullTextUrlList": {"fullTextUrl": [{"documentStyle": "pdf", "availabilityCode": "OA", "url": "https://primary/paper.pdf"}]},
+    }]}}))
+    monkeypatch.setattr(literature, "find_pdf_candidate", AsyncMock(side_effect=http.ToolHttpError("HTTP 403")))
+    result = asyncio.run(literature.lookup_publication(doi="10.123/test", use_fallback=True))
+    assert result["pdfUrls"] == []
+    assert "403" in result["warnings"][0]
+    assert "upload" in result["nextStep"]
+    assert "get_publication_full_text" not in result["nextStep"]
+    assert "useFallback=true" not in result["nextStep"]
+
+
+@pytest.mark.parametrize("disabled", [True, False])
+def test_fallback_requires_config_and_doi(monkeypatch, tmp_path, disabled):
+    settings = configure(monkeypatch, tmp_path)
+    if disabled:
+        settings.scihub_base_url = ""
+    monkeypatch.setattr(literature, "get_json", AsyncMock(return_value={"resultList": {"result": []}}))
+    fallback = AsyncMock()
+    monkeypatch.setattr(literature, "find_pdf_candidate", fallback)
+    result = asyncio.run(literature.lookup_publication(doi="10.123/test" if disabled else None,
+                                                      pmid=None if disabled else "123", use_fallback=True))
+    assert not result["fallbackAvailable"]
+    assert "upload" in result["nextStep"]
+    fallback.assert_not_awaited()
 
 
 def test_xml_creates_complete_reusable_session_document(monkeypatch, tmp_path):
@@ -138,3 +183,53 @@ def test_cache_expires_and_enforces_size_limit(monkeypatch, tmp_path):
     asyncio.run(publication_cache.cached_download("https://repository/two.pdf", "pdf"))
     assert sum(p.stat().st_size for p in tmp_path.glob("*.raw")) <= 1024 * 1024
     assert len(list(tmp_path.glob("*.raw"))) == 1
+
+
+@pytest.mark.parametrize("trust_env", [False, True])
+async def test_discovered_scihub_pdf_keeps_proxy_policy_through_download(monkeypatch, tmp_path, trust_env):
+    settings = configure(monkeypatch, tmp_path)
+    settings.scihub_trust_env = trust_env
+    monkeypatch.setattr(registry, "get_settings", lambda: settings)
+    store = SessionStore()
+    monkeypatch.setattr(registry, "get_session_store", lambda: store)
+    url = "https://separate-cdn.example/paper.pdf"
+    monkeypatch.setattr(literature, "lookup_publication", AsyncMock(return_value={
+        "pdfCandidates": [{"url": url, "source": "scihub"}], "doi": "10.123/test",
+    }))
+    download = AsyncMock(return_value=(b"%PDF-example", "application/pdf"))
+    monkeypatch.setattr(publication_cache, "get_bytes", download)
+    monkeypatch.setattr(registry, "get_pdf_parser", lambda: SimpleNamespace(
+        parse_bytes=AsyncMock(return_value=ParsedDocument("paper", {"methods": "paper"}))))
+    await registry._find_publication({"doi": "10.123/test", "useFallback": True}, "session-a")
+
+    # No proxy/source parameter needs to survive the model round trip.
+    result = await registry._parse_pdf_url({"url": url, "doi": "10.123/test"}, "session-a")
+    assert result["status"] == "ready"
+    assert download.call_args.kwargs["trust_env"] is trust_env
+    assert registry._pdf_trust_env("session-b", url) is True
+
+    # Checking an uncached PDF has the same routing as parsing it.
+    for file in tmp_path.glob("*.raw"):
+        file.unlink()
+    assert (await registry._check_pdf_reachable({"url": url}, "session-a"))["isPdf"]
+    assert download.call_args.kwargs["trust_env"] is trust_env
+    await registry._check_pdf_reachable({"url": "https://publisher.example/primary.pdf"}, "session-a")
+    assert download.call_args.kwargs["trust_env"] is True
+
+
+def test_pdf_source_provenance_is_bounded_and_expires(monkeypatch):
+    from app import session
+
+    clock = [1000.0]
+    monkeypatch.setattr(session.time, "time", lambda: clock[0])
+    monkeypatch.setattr(session, "get_settings", lambda: SimpleNamespace(session_ttl_seconds=60))
+    store = SessionStore()
+    for i in range(65):
+        store.remember_pdf_source("a", f"https://cdn.example/{i}.pdf", "scihub")
+        clock[0] += 0.1
+    assert store.pdf_source("a", "https://cdn.example/0.pdf") is None
+    assert store.pdf_source("a", "https://cdn.example/64.pdf") == "scihub"
+    assert store.pdf_source("b", "https://cdn.example/64.pdf") is None
+    clock[0] += 61
+    assert store.pdf_source("a", "https://cdn.example/64.pdf") is None
+    assert not store._pdf_sources

@@ -55,7 +55,7 @@ import {
   WizardAiBridgeService,
 } from '../../core/services/assistant/wizard-ai-bridge.service';
 import { WizardAutoAnnotationService } from '../../core/services/assistant/wizard-auto-annotation.service';
-import type { AutoTurn } from '../../core/utils/auto-annotation';
+import { type AutoTurn } from '../../core/utils/auto-annotation';
 import { WizardStateService } from '../../core/services/wizard-state.service';
 import { resolveAssistantNavigation } from '../../core/utils/wizard-navigation';
 import { ActionCardListComponent } from './action-card-list.component';
@@ -229,7 +229,7 @@ const DEFAULT_WIDTH = 400;
               }
             </div>
             @if (autoAnnotation.status() === 'idle') {
-              <p>Use the experiment in your message, attached paper or current conversation. Auto annotate applies new suggestions and advances through the wizard without card approval.</p>
+              <p>Use the experiment in your message, attached paper or current conversation. Auto annotate continues from the current step, checking earlier requirements, and applies new suggestions without card approval.</p>
             } @else {
               <p role="status" aria-live="polite">{{ autoAnnotation.resultChanged() ? 'Wizard changed since automatic annotation completed. Run again to generate and validate the latest values.' : autoAnnotation.progress() }}</p>
               @if (autoAnnotation.active()) { <p>Wizard editing is paused during this run. Stop to return to manual editing.</p> }
@@ -242,6 +242,11 @@ const DEFAULT_WIDTH = 400;
               @if (autoAnnotation.warnings().length) {
                 <details><summary>Validation warnings ({{ autoAnnotation.warnings().length }})</summary>
                   <ul>@for (warning of autoAnnotation.warnings(); track $index) { <li>{{ warning }}</li> }</ul>
+                </details>
+              }
+              @if (autoAnnotation.notes().length) {
+                <details><summary>Annotation notes ({{ autoAnnotation.notes().length }})</summary>
+                  <ul>@for (note of autoAnnotation.notes(); track $index) { <li>{{ note }}</li> }</ul>
                 </details>
               }
             }
@@ -1930,7 +1935,10 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
       this._messages.update(messages => [...messages, {
         role: 'assistant',
         content: [this.autoAnnotation.progress(), ...this.autoAnnotation.issues(),
-          ...this.autoAnnotation.warnings().map(warning => `Warning: ${warning}`)].join('\n\n'),
+          ...this.autoAnnotation.warnings().map(warning => `Warning: ${warning}`),
+          ...(this.autoAnnotation.notes().length
+            ? [`Annotation notes:\n${this.autoAnnotation.notes().map(note => `- ${note}`).join('\n')}`] : []),
+        ].join('\n\n'),
       }]);
       this.persistActive();
     }
@@ -2459,6 +2467,7 @@ function finalizeTurn(
     toolCalls: AssistantToolCall[];
     nextStep: AssistantNextStep | null;
     trace?: Record<string, unknown> | null;
+    automation?: AssistantChatMessage['automation'];
   }
 ): AssistantChatMessage {
   let timeline = mergeToolsFromResult(message.timeline || [], result.toolCalls);
@@ -2476,6 +2485,7 @@ function finalizeTurn(
     citations: result.citations.length ? result.citations : message.citations,
     nextStep: result.nextStep || message.nextStep,
     trace: result.trace ?? message.trace ?? null,
+    ...(result.automation ? { automation: result.automation } : {}),
   };
 }
 

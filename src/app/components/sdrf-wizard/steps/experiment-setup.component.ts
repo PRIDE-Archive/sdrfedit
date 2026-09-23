@@ -33,8 +33,8 @@ import { TemplateColumnsPreviewComponent } from '../template-columns-preview.com
         <h3>What type of experiment is this?</h3>
         <p class="step-description">
           Choose templates by layer: <strong>technology</strong> (required),
-          <strong>sample</strong> (recommended), and optional <strong>experiment</strong> add-ons.
-          Defaults are human + MS proteomics. Use <strong>Columns</strong> on a card to see required fields.
+          <strong>sample</strong> (optional), and optional <strong>experiment</strong> add-ons.
+          The default is MS proteomics with generic sample metadata. Use <strong>Columns</strong> on a card to see required fields.
         </p>
       </div>
 
@@ -60,7 +60,7 @@ import { TemplateColumnsPreviewComponent } from '../template-columns-preview.com
           </div>
           <div class="layer-info">
             <span class="layer-badge layer-sample">Sample</span>
-            <span class="layer-desc">Organism / study context — human, vertebrates, …</span>
+            <span class="layer-desc">Optional organism / study context — human, vertebrates, …</span>
           </div>
           <div class="layer-info">
             <span class="layer-badge layer-experiment">Experiment</span>
@@ -115,13 +115,18 @@ import { TemplateColumnsPreviewComponent } from '../template-columns-preview.com
         <h4 class="section-title">
           <span class="layer-badge layer-sample">Sample</span>
           Sample template
-          <span class="optional-hint">(recommended)</span>
+          <span class="optional-hint">(optional)</span>
         </h4>
+        <p class="step-description">
+          Leave unselected if no specialized sample template applies.
+          Click a selected template again to deselect it.
+        </p>
         <div class="template-grid">
           @for (template of visibleSampleTemplates(); track template.id) {
             <div
               class="template-card"
               [class.selected]="wizardState.sampleTemplate() === template.id"
+              [attr.aria-pressed]="wizardState.sampleTemplate() === template.id"
               (click)="selectSampleTemplate(template.id)"
               (keydown.enter)="selectSampleTemplate(template.id)"
               tabindex="0"
@@ -240,7 +245,7 @@ import { TemplateColumnsPreviewComponent } from '../template-columns-preview.com
                 <div>{{ err }}</div>
               }
             } @else {
-              Please complete template selection and sample count.
+              Please select a technology template and enter a valid sample count.
             }
           </div>
         </div>
@@ -435,7 +440,9 @@ export class ExperimentSetupComponent implements OnInit {
   }
 
   selectSampleTemplate(template: WizardTemplate): void {
-    this.wizardState.setSampleTemplate(template);
+    this.wizardState.setSampleTemplate(
+      this.wizardState.sampleTemplate() === template ? null : template
+    );
   }
 
   clearSampleTemplate(): void {

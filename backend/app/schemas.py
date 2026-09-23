@@ -222,6 +222,7 @@ class WizardSnapshot(BaseModel):
 class AutomationReport(BaseModel):
     status: Literal["ready", "blocked"]
     issues: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
 
 
 class ChatRequest(BaseModel):

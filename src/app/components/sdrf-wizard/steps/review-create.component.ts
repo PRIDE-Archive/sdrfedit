@@ -625,7 +625,7 @@ export class ReviewCreateComponent {
 
   readonly sampleTemplateLabel = computed(() => {
     const id = getSampleTemplateId(this.state());
-    return WIZARD_TEMPLATES.find(t => t.id === id)?.name || id || 'Not selected';
+    return WIZARD_TEMPLATES.find(t => t.id === id)?.name || id || 'None (optional)';
   });
 
   readonly technologyTemplateLabel = computed(() => {

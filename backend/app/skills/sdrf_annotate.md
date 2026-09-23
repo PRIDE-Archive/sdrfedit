@@ -86,7 +86,11 @@ validation. Single-level factors warrant review, not fabricated additional group
      stored as a session document; read its `documentId` (methods/results/tables).
    - If XML is unavailable or fails, try `pdfUrls` in order using `parse_pdf_url`.
      It validates and caches the PDF, parses with MinerU, and returns `documentId`.
-   - Only after all candidates fail and no matching session document exists, offer
+   - After XML and Europe PMC PDF candidates fail, call `find_publication` with
+     the resolved DOI and `useFallback=true` once to try Sci-Hub. Pass the DOI
+     and returned URL to `parse_pdf_url`, then read the resulting document.
+     Do not repeat a failed fallback.
+   - Only after all sources fail and no matching session document exists, offer
      upload and **STOP** before templates. Explain that the user may continue with
      PRIDE alone; proceed on a later explicit continuation without upload.
    - Abstracts are not full-text evidence. Supplementary references are not yet

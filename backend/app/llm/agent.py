@@ -185,7 +185,6 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
     pride_only = latest_user in {"continue with pride metadata only", "仅使用pride元数据继续", "仅使用 pride 元数据继续"}
     explicit_documents = [doc.document_id for doc in store.list_for_session(request.sessionId) if doc.document_id in latest_user]
     setup_gate = SetupGate(store, request.sessionId, accession, pride_only=pride_only, explicit_documents=explicit_documents)
-    card_retry = False
     silent_tool_rounds = 0
 
     answer_parts: list[str] = []
@@ -200,7 +199,6 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
     propose_deferred: list[str] = []
 
     try:
-        exhausted_rounds = True
         for _round in range(max(1, settings.llm_max_tool_rounds)):
             round_text: list[str] = []
             calls: list[ToolCall] = []
@@ -245,12 +243,6 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
                 silent_tool_rounds = 0
 
             if not calls:
-                if focus_step == "setup" and not collected_actions and not card_retry and not setup_gate.reason() and (skill or request.mode == "step"):
-                    card_retry = True
-                    messages.append({"role": "assistant", "content": text})
-                    messages.append({"role": "user", "content": "The setup evidence is available, but no Apply cards were emitted. Call propose_wizard_actions for supported setup values now. Do not repeat prose or invent unsupported values."})
-                    continue
-                exhausted_rounds = False
                 break
 
             if not text.strip() and any(call.name != PROPOSE_TOOL_NAME for call in calls):
@@ -355,119 +347,8 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
                         seen_citations.add(key)
                         collected_citations.append(citation)
 
-        if exhausted_rounds and (focus_step != "setup" or not setup_gate.reason()) and not collected_actions:
-            # Search rounds are spent; keep ONLY propose_wizard_actions so the model
-            # can still emit Apply cards from terms already verified this turn.
-            yield AgentEvent.status("Wrapping up — proposing cards from verified evidence")
-            messages.append(
-                {
-                    # "user", not "system": some backends (e.g. vLLM's default chat
-                    # template) reject a system-role message anywhere but the very
-                    # first position ("System message must be at the beginning").
-                    "role": "user",
-                    "content": (
-                        "Ontology / evidence tool rounds are exhausted. "
-                        "You MUST call propose_wizard_actions NOW for the current focus step, "
-                        "using only accessions and labels already verified in this turn "
-                        "(search_ontology / search_cell_line / verify_* results above). "
-                        "Do not call any other tool. Do not answer with prose alone — "
-                        "without propose_wizard_actions the user gets no Apply cards."
-                    ),
-                }
-            )
-            closing_text: list[str] = []
-            closing_calls: list[ToolCall] = []
-            closing_splitter = ThinkingSplitter()
-            yield AgentEvent.status("Thinking…")
-            async for event in client.stream(messages, tools=[proposal_tool]):
-                if event.type == "token":
-                    visible = closing_splitter.feed(event.text)
-                    reasoning = closing_splitter.take_reasoning()
-                    if reasoning:
-                        yield AgentEvent(type="thinking", text=reasoning)
-                    if visible:
-                        closing_text.append(visible)
-                        yield AgentEvent.token(visible)
-                elif event.type == "tool_calls":
-                    closing_calls = event.tool_calls
-                elif event.type == "reasoning":
-                    yield AgentEvent(type="thinking", text=event.text)
-            trailing = closing_splitter.flush()
-            if trailing:
-                closing_text.append(trailing)
-                yield AgentEvent.token(trailing)
-            if closing_text:
-                answer_parts.append("".join(closing_text))
-
-            if closing_calls:
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": "".join(closing_text),
-                        "tool_calls": [
-                            {
-                                "id": call.id,
-                                "type": "function",
-                                "function": {
-                                    "name": call.name,
-                                    "arguments": call.arguments or "{}",
-                                },
-                            }
-                            for call in closing_calls
-                        ],
-                    }
-                )
-                for call in closing_calls:
-                    if call.name != PROPOSE_TOOL_NAME:
-                        messages.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": call.id,
-                                "content": json.dumps(
-                                    {
-                                        "error": (
-                                            f"Tool '{call.name}' is disabled in wrap-up. "
-                                            "Call propose_wizard_actions only."
-                                        )
-                                    }
-                                ),
-                            }
-                        )
-                        continue
-                    actions, rejected, deferred = _parse_actions(call.arguments, focus_step)
-                    actions, setup_rejected = await setup_gate.filter(actions)
-                    rejected.extend(setup_rejected)
-                    actions, gate_rejected = _gate_ontology_actions(
-                        actions,
-                        request.wizardState,
-                        verified_ids,
-                        verified_labels,
-                    )
-                    rejected.extend(gate_rejected)
-                    if request.executionMode == "auto":
-                        automation_report = parse_automation_report(call.arguments, rejected + deferred)
-                    propose_rejected.extend(rejected)
-                    propose_deferred.extend(deferred)
-                    collected_actions.extend(actions)
-                    if actions:
-                        yield AgentEvent.actions(actions)
-                    if rejected or deferred:
-                        yield AgentEvent.status(
-                            f"Propose: accepted {len(actions)}, "
-                            f"rejected {len(rejected)}, deferred {len(deferred)}"
-                        )
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": call.id,
-                            "content": json.dumps(
-                                _propose_feedback(actions, rejected, deferred, focus_step)
-                            ),
-                        }
-                    )
-
         if not collected_actions and focus_step == "setup" and (skill or request.mode == "step"):
-            reason = setup_gate.reason() or "; ".join(propose_rejected[-3:]) or "The model did not emit valid setup actions. Retry the setup request."
+            reason = setup_gate.reason() or "; ".join(propose_rejected[-3:]) or "The assistant returned no setup cards. Reply in chat to continue."
             miss = "No setup cards were generated: " + reason
             answer_parts.append(miss)
             yield AgentEvent.token("\n\n" + miss)
@@ -482,8 +363,7 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
             else:
                 miss = (
                     "No characteristic suggestion cards were proposed this turn. "
-                    "Call propose_wizard_actions with verified ontology terms "
-                    "(a prose summary alone does not create Apply cards)."
+                    "Reply in chat to continue."
                 )
             yield AgentEvent.status(miss)
             if not any(miss[:40] in part for part in answer_parts):
@@ -787,7 +667,7 @@ def _parse_actions(
         if op == "setSampleCount" and (len(args) != 1 or type(args[0]) is not int or not 1 <= args[0] <= MAX_SAMPLE_COUNT):
             rejected.append(f"setSampleCount: expected one integer between 1 and {MAX_SAMPLE_COUNT}.")
             continue
-        if op in {"setTechnologyTemplate", "setSampleTemplate"} and (len(args) != 1 or not isinstance(args[0], str) or not args[0].strip()):
+        if op in {"setTechnologyTemplate", "setSampleTemplate"} and not (op == "setSampleTemplate" and args == [None]) and (len(args) != 1 or not isinstance(args[0], str) or not args[0].strip()):
             rejected.append(f"{op}: expected one non-empty template ID.")
             continue
         if op == "setExperimentTemplates" and (len(args) != 1 or not isinstance(args[0], list) or any(not isinstance(n, str) or not n.strip() for n in args[0])):

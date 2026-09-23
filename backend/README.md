@@ -196,10 +196,33 @@ XML first. XML is stored as a `documentId`, just like PDFs parsed through MinerU
 can be read with `read_document`. Tables and supplementary-file references are retained;
 supplementary attachments themselves are not automatically downloaded in this version.
 
-If XML is unavailable or fails, open PDF candidates from Europe PMC and Unpaywall are
-tried before offering upload. Set `UNPAYWALL_EMAIL` to a real maintainer contact to enable
-Unpaywall. Without it, Europe PMC acquisition still works. PDF parsing requires the
-existing MinerU configuration; XML does not. Only an actual `%PDF-` response is accepted.
+If XML is unavailable or fails, Europe PMC PDF candidates are tried first. After
+those fail, the assistant calls `find_publication` with the DOI and
+`useFallback=true` to discover a Sci-Hub PDF, then passes its URL and DOI to
+`parse_pdf_url`. Normal publication lookup does not contact Sci-Hub. Unpaywall is
+no longer used. `SCIHUB_BASE_URL` defaults to `https://www.sci-hub.ee/`; set it to
+another mirror base URL or leave it empty to disable fallback. Restart the backend
+after changing environment configuration.
+
+Sci-Hub requests default to direct connections (`SCIHUB_TRUST_ENV=false`), ignoring
+`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and other HTTPX environment settings only
+for its discovery requests and discovered PDF downloads. The backend records the
+exact discovered URL per session, so PDFs on separate CDN domains and their redirects
+use the same policy without relying on the model to pass a proxy flag. PDF reachability
+checks use this policy too. Other sources, LLM calls, and MinerU keep their existing
+proxy behavior; no global environment variables or system proxy settings are changed.
+Set `SCIHUB_TRUST_ENV=true` to restore environment-based networking for Sci-Hub.
+TLS certificate verification remains enabled. Because HTTPX's `trust_env=false` also
+ignores `SSL_CERT_FILE`/`SSL_CERT_DIR`, direct mode uses the library's default trust store.
+This bypasses environment proxies, not an OS-level VPN/TUN or transparent proxy.
+
+Fallback extracts PDF links from the returned HTML or follows a direct PDF response.
+It does not execute JavaScript or solve browser verification; HTTP 403, missing
+PDF links, and download/parse failures are reported to the assistant. After fallback
+fails, ask for upload or explicit PRIDE-only continuation instead of retrying discovery.
+PDF parsing requires the existing MinerU configuration; XML does not. Only an actual
+`%PDF-` response is accepted. A discovered Sci-Hub link is not marked as open-access
+or assigned a license; discovery is not proof that the PDF is downloadable.
 
 Original downloads are cached in `PUBLICATION_CACHE_DIR` (default `data/publications`)
 for `PUBLICATION_CACHE_TTL_SECONDS` (default seven days), with a size limit of

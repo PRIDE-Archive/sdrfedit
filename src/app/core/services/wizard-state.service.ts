@@ -1673,6 +1673,8 @@ export class WizardStateService {
     const next: WizardState = {
       ...baseline,
       ...state,
+      sampleTemplate: getSampleTemplateId(state),
+      template: getSampleTemplateId(state),
       characteristicChoices: state.characteristicChoices || {},
       characteristicColumns: state.characteristicColumns || [],
       experimentTemplates: state.experimentTemplates || [],

@@ -62,9 +62,10 @@ async def get_text(url: str, *, params: dict[str, Any] | None = None, timeout: f
 
 
 @retry_request
-async def get_bytes(url: str, *, timeout: float = 120.0, max_bytes: int = 60 * 1024 * 1024) -> tuple[bytes, str]:
+async def get_bytes(url: str, *, timeout: float = 120.0, max_bytes: int = 60 * 1024 * 1024,
+                    trust_env: bool = True) -> tuple[bytes, str]:
     """Download a binary payload, returning (content, content_type)."""
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, trust_env=trust_env) as client:
         async with client.stream("GET", url, headers={"User-Agent": USER_AGENT}) as response:
             if response.status_code == 429 or response.status_code >= 500:
                 raise RetryableHttpError(f"HTTP {response.status_code} for {url}")

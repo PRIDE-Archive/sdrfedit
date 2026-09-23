@@ -20,13 +20,23 @@ export interface AutoAnnotationPorts<Snapshot> {
   apply(card: WizardActionCard): Promise<void>;
   record(cards: WizardActionCard[], applied: boolean, error?: string): void;
   errors(step: number): string[];
+  notes?(step: number, notes: string[]): void;
   validate(): Promise<AutoValidation>;
   progress(message: string): void;
 }
 
 export interface AutoAnnotationOutcome {
-  status: 'complete' | 'blocked' | 'stopped';
+  status: 'complete' | 'blocked' | 'stopped' | 'waiting';
   issues: string[];
+}
+
+/** Resume at the displayed step unless an earlier step is actually incomplete. */
+export function autoAnnotationStartStep(currentStep: number, errors: (step: number) => string[]): number {
+  const current = Math.min(5, Math.max(0, currentStep));
+  for (let step = 0; step < current; step++) {
+    if (errors(step).length) return step;
+  }
+  return current;
 }
 
 // Stable tiers cover dependencies without reordering operations within a tier.
@@ -61,11 +71,12 @@ export function waitForAutoTask<T>(task: Promise<T>, signal: AbortSignal): Promi
 /** Five mutation steps followed by final SDRF validation. Never runs implicitly. */
 export async function runAutoAnnotation<S>(
   ports: AutoAnnotationPorts<S>, signal: AbortSignal,
+  startStep = 0,
 ): Promise<AutoAnnotationOutcome> {
   const check = () => { if (signal.aborted) throw new Error('Stopped'); };
   let lastCommittedBatch = '';
   let lastCommittedState = '';
-  let step = 0;
+  let step = startStep;
   let feedback: string[] = [];
   let finalRepairs = 0;
   try {
@@ -76,16 +87,23 @@ export async function runAutoAnnotation<S>(
         let finished = false;
         for (let attempt = 0; attempt < 3; attempt++) {
           check();
-          ports.progress(`Step ${step + 1} of 5${attempt ? ` · repair ${attempt} of 2` : ''}`);
+          ports.progress(`Annotating wizard step ${step + 1}${attempt ? ` · repair ${attempt} of 2` : ''}`);
           const beforeRequest = ports.fingerprint();
           const turn = await ports.request(step, feedback);
           check();
           if (beforeRequest !== ports.fingerprint()) {
             return { status: 'blocked', issues: ['Wizard changed while the assistant was responding. Start a new run using the latest state.'] };
           }
+          if (!turn.cards.length) {
+            ports.notes?.(step, turn.report?.notes || []);
+            return { status: 'waiting', issues: [
+              ...(turn.report?.issues || []), ...ports.errors(step),
+            ] };
+          }
           if (!turn.report) {
             return { status: 'blocked', issues: ['The backend did not return an automatic completion report. Update the backend before using Auto annotate.'] };
           }
+          ports.notes?.(step, turn.report.notes || []);
           const snapshot = ports.snapshot();
           const seen = new Set<string>();
           const batch = orderAutoCards(turn.cards);

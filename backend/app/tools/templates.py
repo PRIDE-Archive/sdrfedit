@@ -72,7 +72,7 @@ async def list_templates(layer: str | None = None) -> dict:
         "layers": grouped,
         "selectionRules": [
             "Pick exactly one technology template (e.g. ms-proteomics, affinity-proteomics).",
-            "Pick exactly one sample/organism template (human, vertebrates, invertebrates, plants).",
+            "Pick zero or one sample template from the catalogue; omit it when no specialized sample template applies.",
             "Add zero or more experiment templates (cell-lines, dia-acquisition, single-cell, ...).",
             "Templates listed under internal (base, sample-metadata) are inherited, never selected.",
         ],
@@ -181,10 +181,12 @@ async def validate_combination(
     elif layer_of(technology) != "technology":
         errors.append(f"'{technology}' is a {layer_of(technology) or 'unknown'} template, not technology.")
 
-    if not sample:
-        errors.append("A sample/organism template is required (e.g. human).")
-    elif layer_of(sample) not in ("sample", None):
+    if sample and layer_of(sample) not in ("sample", None):
         errors.append(f"'{sample}' is a {layer_of(sample)} template, not sample.")
+
+    if technology in entries and not sample and not experiments:
+        if not entries[technology].get("usable_alone"):
+            errors.append(f"'{technology}' cannot be used alone; select a sample template.")
 
     selected = [n for n in [technology, sample, *experiments] if n and n in entries]
     for name in selected:

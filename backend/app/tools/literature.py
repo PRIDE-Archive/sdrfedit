@@ -1,14 +1,14 @@
-"""Resolve article identifiers, discover open copies, and extract JATS evidence."""
+"""Resolve articles, discover primary/fallback PDFs, and extract JATS evidence."""
 
 from __future__ import annotations
 
 import hashlib
 import re
-from urllib.parse import quote
 
 from ..config import get_settings
 
 from .http import ToolHttpError, get_json
+from .scihub import find_pdf_candidate
 
 EPMC_BASE = "https://www.ebi.ac.uk/europepmc/webservices/rest"
 
@@ -59,8 +59,9 @@ def normalize_doi(value: str | None) -> str:
     return re.sub(r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)", "", (value or "").strip(), flags=re.I).lower()
 
 
-async def lookup_publication(pmid: str | None = None, doi: str | None = None, title: str | None = None) -> dict:
-    """Resolve identifiers in order, then discover downloadable open copies."""
+async def lookup_publication(pmid: str | None = None, doi: str | None = None, title: str | None = None,
+                             use_fallback: bool = False) -> dict:
+    """Resolve identifiers, discovering fallback PDFs only when explicitly requested."""
     doi = normalize_doi(doi)
     pmid = str(pmid or "").strip()
     if pmid and not pmid.isdigit():
@@ -103,21 +104,20 @@ async def lookup_publication(pmid: str | None = None, doi: str | None = None, ti
         if entry.get("documentStyle") == "pdf" and entry.get("availabilityCode") in {"OA", "F"} and entry.get("url"):
             candidates.append({"url": entry["url"], "source": "europepmc"})
     resolved_doi = normalize_doi(record.get("doi")) or doi
-    email = get_settings().unpaywall_email
-    if resolved_doi and email:
-        try:
-            oa = await get_json(f"https://api.unpaywall.org/v2/{quote(resolved_doi, safe='')}", params={"email": email})
-            for location in [oa.get("best_oa_location"), *(oa.get("oa_locations") or [])]:
-                if location and location.get("url_for_pdf"):
-                    candidates.append({"url": location["url_for_pdf"], "source": "unpaywall",
-                                       "license": location.get("license"), "version": location.get("version")})
-        except ToolHttpError as error:
-            warnings.append(f"Unpaywall: {error}")
-    elif resolved_doi:
-        warnings.append("Unpaywall disabled: configure UNPAYWALL_EMAIL to discover additional open PDFs.")
+    fallback_available = bool(resolved_doi and get_settings().scihub_base_url.strip())
+    if use_fallback:
+        # Existing Europe PMC candidates have already failed; do not retry them.
+        candidates = []
+        if fallback_available:
+            try:
+                candidates.append(await find_pdf_candidate(resolved_doi, get_settings().scihub_base_url))
+            except ToolHttpError as error:
+                warnings.append(f"Sci-Hub: {error}")
+        else:
+            warnings.append("Sci-Hub fallback unavailable: a DOI and SCIHUB_BASE_URL are required.")
     candidates = list({c["url"]: c for c in candidates if c["url"].startswith(("https://", "http://"))}.values())
     pmcid = record.get("pmcid")
-    open_full_text = bool(pmcid) and record.get("isOpenAccess") == "Y"
+    open_full_text = bool(pmcid) and record.get("isOpenAccess") == "Y" and not use_fallback
     return {
         "found": bool(record or candidates),
         "status": "full_text_available" if open_full_text or candidates else ("abstract_only" if record.get("abstractText") else "unavailable"),
@@ -128,18 +128,29 @@ async def lookup_publication(pmid: str | None = None, doi: str | None = None, ti
         "fullTextAvailable": open_full_text, "abstract": _clean(record.get("abstractText"))[:4000],
         "pdfUrls": [c["url"] for c in candidates], "pdfCandidates": candidates, "warnings": warnings,
         "url": f"https://doi.org/{resolved_doi}" if resolved_doi else f"https://europepmc.org/article/MED/{pmid}",
-        "nextStep": _next_step(open_full_text, bool(pmcid), bool(candidates)),
+        "fallbackAvailable": fallback_available and not use_fallback,
+        "fallbackAttempted": use_fallback,
+        "nextStep": _next_step(open_full_text and not use_fallback, bool(candidates), fallback_available and not use_fallback),
     }
 
 
-def _next_step(open_full_text: bool, has_pmcid: bool, has_pdf: bool) -> str:
+def _next_step(open_full_text: bool, has_pdf: bool, fallback_available: bool) -> str:
+    fallback = (
+        "If these sources are unavailable or fail, call find_publication with the resolved DOI "
+        "and useFallback=true to try Sci-Hub before offering upload. "
+        if fallback_available else
+        "If acquisition fails, offer upload; do not repeat fallback discovery. "
+    )
     if open_full_text:
         return ("Call get_publication_full_text first: it stores XML as a session document. "
                 "Then read_document using its documentId. If XML fails, try each pdfUrls with "
-                "parse_pdf_url before offering upload.")
+                "parse_pdf_url. " + fallback)
     if has_pdf:
-        return ("Call parse_pdf_url for the open pdfUrls candidates in order until one succeeds, "
-                "then read_document. check_pdf_url is optional. Offer upload only after all candidates fail.")
+        return ("Call parse_pdf_url for the pdfUrls candidates in order until one succeeds, "
+                "passing the resolved DOI, then read_document. check_pdf_url is optional. " + fallback)
+    if fallback_available:
+        return ("Call list_documents and reuse the matching paper if present. Otherwise call "
+                "find_publication with the resolved DOI and useFallback=true to try Sci-Hub.")
     return ("Call list_documents and reuse the matching paper if present. Otherwise ask the user to "
             "upload the paper and stop before proposing templates. If they continue without upload, "
             "use PRIDE metadata and label any abstract as abstract-only evidence.")

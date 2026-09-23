@@ -5,7 +5,7 @@ import {
   getSpecialtyCharacteristicKey, isWizardSkippedCharacteristic,
   resolveFactorValue, factorCandidates, resolveRunFactorValue,
 } from '../../models/wizard';
-import { runAutoAnnotation, waitForAutoTask, type AutoTurn, type AutoValidation } from '../../utils/auto-annotation';
+import { autoAnnotationStartStep, runAutoAnnotation, waitForAutoTask, type AutoTurn, type AutoValidation } from '../../utils/auto-annotation';
 import { WizardStateService } from '../wizard-state.service';
 import { WizardGeneratorService } from '../wizard-generator.service';
 import { SdrfExportService } from '../sdrf-export.service';
@@ -29,9 +29,10 @@ export class WizardAutoAnnotationService {
   private readonly exporter = new SdrfExportService();
   readonly active = signal(false);
   readonly stopping = signal(false);
-  readonly status = signal<'idle' | 'running' | 'complete' | 'blocked' | 'stopped'>('idle');
+  readonly status = signal<'idle' | 'running' | 'complete' | 'blocked' | 'stopped' | 'waiting'>('idle');
   readonly progress = signal('');
   readonly issues = signal<string[]>([]);
+  readonly notes = signal<string[]>([]);
   readonly warnings = signal<string[]>([]);
   private readonly result = signal<{ tsv: string; fingerprint: string } | null>(null);
   private readonly undoPoint = signal<{ checkpoint: Checkpoint; fingerprint: string; runId: string } | null>(null);
@@ -59,6 +60,7 @@ export class WizardAutoAnnotationService {
   async start(callbacks: AutoAnnotationCallbacks): Promise<void> {
     if (this.active()) return;
     const checkpoint = this.checkpoint();
+    const startStep = autoAnnotationStartStep(checkpoint.step, step => this.stepErrors(step));
     const runId = globalThis.crypto?.randomUUID?.() || `auto_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const controller = new AbortController();
     this.controller = controller;
@@ -67,6 +69,7 @@ export class WizardAutoAnnotationService {
     this.stopping.set(false);
     this.status.set('running');
     this.issues.set([]);
+    this.notes.set([]);
     this.warnings.set([]);
     this.result.set(null);
     this.undoPoint.set(null);
@@ -78,6 +81,9 @@ export class WizardAutoAnnotationService {
         // Preserve the normal next-step initialization (samples, factors, runs).
         if (step === this.wizard.currentStep() + 1) this.wizard.nextStep();
         else this.wizard.goToStep(step);
+        if (this.wizard.currentStep() !== step) {
+          throw new Error(`Cannot enter step ${step + 1}: the preceding wizard step is incomplete.`);
+        }
       },
       request: (step, feedback) => callbacks.request(step, feedback, runId),
       apply: card => {
@@ -89,14 +95,19 @@ export class WizardAutoAnnotationService {
       },
       record: callbacks.record,
       errors: step => this.stepErrors(step),
+      notes: (step, notes) => this.notes.update(existing => [...new Set([
+        ...existing, ...notes.map(note => `Step ${step + 1}: ${note}`),
+      ])]),
       validate: () => this.validate(controller.signal),
       progress: text => this.progress.set(text),
-    }, controller.signal);
+    }, controller.signal, startStep);
     this.status.set(outcome.status);
     this.issues.set(outcome.issues);
+    const location = `step ${this.wizard.currentStep() + 1}: ${WIZARD_STEPS[this.wizard.currentStep()].title}`;
     this.progress.set(outcome.status === 'complete' ? 'SDRF generated and template validation passed.'
-      : outcome.status === 'stopped' ? 'Stopped. Completed steps are kept.'
-      : 'Draft saved. Automatic annotation could not finish.');
+      : outcome.status === 'waiting' ? `Waiting for your reply at ${location}. No recommendation cards were generated. Completed steps are kept. Answer the assistant in chat, or choose Auto annotate to continue.`
+      : outcome.status === 'stopped' ? `Stopped at ${location}. Completed steps are kept.`
+      : `Draft saved at ${location}. Automatic annotation could not finish.`);
     if (outcome.status === 'stopped') this.result.set(null);
     this.undoPoint.set({ checkpoint, fingerprint: this.stateFingerprint(), runId });
     this.controller = null;
@@ -120,6 +131,7 @@ export class WizardAutoAnnotationService {
     this.result.set(null);
     this.undoPoint.set(null);
     this.issues.set([]);
+    this.notes.set([]);
     this.warnings.set([]);
   }
 

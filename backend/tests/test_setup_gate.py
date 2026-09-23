@@ -65,7 +65,8 @@ async def test_pride_only_still_requires_metadata_and_valid_templates(monkeypatc
     assert kept[0].confidence == "low" and not rejected
 
 
-async def test_prose_only_setup_gets_one_card_retry(monkeypatch):
+@pytest.mark.parametrize("execution_mode", ["manual", "auto"])
+async def test_prose_only_setup_returns_without_card_retry(monkeypatch, execution_mode):
     class Client:
         calls = 0
         def __init__(self, settings): pass
@@ -77,11 +78,12 @@ async def test_prose_only_setup_gets_one_card_retry(monkeypatch):
                 yield StreamEvent(type="token", text="Here is the explanation.")
     monkeypatch.setattr(agent, "LlmClient", Client)
     monkeypatch.setattr(SetupGate, "reason", lambda self: None)
-    request = ChatRequest(sessionId="test", messages=[{"role": "user", "content": "Help with setup"}], focusStep="setup", mode="step")
+    request = ChatRequest(sessionId="test", messages=[{"role": "user", "content": "Help with setup"}], focusStep="setup", mode="step", executionMode=execution_mode)
     events = [event async for event in agent.run_agent(request)]
-    assert len([event for event in events if event["type"] == "actions"]) == 1
+    assert not any(event["type"] == "actions" for event in events)
+    assert "Here is the explanation." in events[-1]["result"]["content"]
     assert events[-1]["type"] == "done"
-    assert Client.calls == 3
+    assert Client.calls == 1
 
 
 async def test_missing_evidence_does_not_force_cards_at_round_limit(monkeypatch):
@@ -100,3 +102,32 @@ async def test_missing_evidence_does_not_force_cards_at_round_limit(monkeypatch)
     assert not any(event["type"] == "actions" for event in events)
     assert "No setup cards" in events[-1]["result"]["content"]
     assert Client.calls == 1
+
+
+@pytest.mark.parametrize("focus_step", ["setup", "characteristics"])
+@pytest.mark.parametrize("execution_mode", ["manual", "auto"])
+async def test_round_limit_returns_without_forced_card_request(monkeypatch, focus_step, execution_mode):
+    from types import SimpleNamespace
+
+    class Client:
+        calls = 0
+
+        def __init__(self, settings):
+            pass
+
+        async def stream(self, *args, **kwargs):
+            Client.calls += 1
+            yield StreamEvent(type="tool_calls", tool_calls=[
+                ToolCall("p", "propose_wizard_actions", json.dumps({"actions": []}))
+            ])
+
+    monkeypatch.setattr(agent, "LlmClient", Client)
+    monkeypatch.setattr(agent, "get_settings", lambda: SimpleNamespace(llm_max_tool_rounds=1))
+    monkeypatch.setattr(agent, "get_session_store", SessionStore)
+    monkeypatch.setattr(SetupGate, "reason", lambda self: None)
+    request = ChatRequest(sessionId="test", messages=[{"role": "user", "content": "Help me annotate"}],
+                          focusStep=focus_step, mode="step", executionMode=execution_mode)
+    events = [event async for event in agent.run_agent(request)]
+    assert Client.calls == 1
+    assert not any(event["type"] == "actions" for event in events)
+    assert events[-1]["type"] == "done"

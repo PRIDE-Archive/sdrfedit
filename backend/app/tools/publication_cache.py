@@ -18,7 +18,7 @@ def cache_root() -> Path:
     return root
 
 
-async def cached_download(url: str, kind: str) -> tuple[bytes, str]:
+async def cached_download(url: str, kind: str, *, trust_env: bool = True) -> tuple[bytes, str]:
     if kind not in {"pdf", "xml"}:
         raise ValueError("Unsupported article format")
     root = cache_root()
@@ -34,7 +34,8 @@ async def cached_download(url: str, kind: str) -> tuple[bytes, str]:
     path = root / (hashlib.sha256(f"{kind}:{url}".encode()).hexdigest() + ".raw")
     if path.exists():
         return path.read_bytes(), str(path)
-    data, _ = await get_bytes(url, max_bytes=min(settings.max_upload_mb, settings.publication_cache_max_mb) * 1024 * 1024)
+    data, _ = await get_bytes(url, trust_env=trust_env,
+                             max_bytes=min(settings.max_upload_mb, settings.publication_cache_max_mb) * 1024 * 1024)
     if kind == "pdf" and not data.startswith(b"%PDF-"):
         raise ToolHttpError("Downloaded response is not a PDF (possibly a login or error page).")
     if kind == "xml":

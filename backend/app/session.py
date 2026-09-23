@@ -48,6 +48,20 @@ class SessionStore:
     def __init__(self) -> None:
         self._documents: dict[str, StoredDocument] = {}
         self._evidence: dict[str, dict[str, EvidenceNote]] = {}
+        self._pdf_sources: dict[str, dict[str, tuple[str, float]]] = {}
+
+    def remember_pdf_source(self, session_id: str, url: str, source: str) -> None:
+        """Keep discovery provenance so downloads need no model-supplied proxy flags."""
+        self._evict()
+        sources = self._pdf_sources.setdefault(session_id, {})
+        sources[url] = (source, time.time())
+        while len(sources) > 64:
+            del sources[min(sources, key=lambda key: sources[key][1])]
+
+    def pdf_source(self, session_id: str, url: str) -> str | None:
+        self._evict()
+        entry = self._pdf_sources.get(session_id, {}).get(url)
+        return entry[0] if entry else None
 
     def add_document(
         self, session_id: str, file_name: str, document: ParsedDocument, origin: str = "upload", metadata: dict | None = None
@@ -103,6 +117,12 @@ class SessionStore:
                 del notes[key]
             if not notes:
                 del self._evidence[session_id]
+
+        for session_id, sources in list(self._pdf_sources.items()):
+            for url in [url for url, (_, created_at) in sources.items() if created_at < cutoff]:
+                del sources[url]
+            if not sources:
+                del self._pdf_sources[session_id]
 
 
 _store: SessionStore | None = None

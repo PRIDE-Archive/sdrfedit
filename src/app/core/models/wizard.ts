@@ -1563,7 +1563,7 @@ export interface WizardState {
  * Resolve the sample-layer template id from wizard state.
  */
 export function getSampleTemplateId(state: Pick<WizardState, 'sampleTemplate' | 'template'>): string | null {
-  return state.sampleTemplate ?? state.template;
+  return state.sampleTemplate !== undefined ? state.sampleTemplate : state.template;
 }
 
 /**
@@ -1594,8 +1594,8 @@ export function createDefaultSample(index: number): WizardSampleEntry {
 export function createEmptyWizardState(): WizardState {
   return {
     // Step 1
-    template: 'human',
-    sampleTemplate: 'human',
+    template: null,
+    sampleTemplate: null,
     technologyTemplate: 'ms-proteomics',
     experimentTemplates: [],
     sampleCount: 1,

@@ -38,8 +38,15 @@ async function waitFor(predicate) {
 const errors = [];
 const requests = [];
 let scenario = 'manual';
+let textOnlyReplySent = false;
 let releaseRequest;
 let releaseValidation;
+let holdRuns = false;
+let releaseRuns;
+const sampleNotes = [
+  'No per-sample characteristic patch is needed: each characteristic has one candidate already assigned to sample_1.',
+  'Acquisition strategy (DT/DDNL) is scope=run and must be assigned on Runs & Files, not Sample Values.',
+];
 const context = await browser.newContext({ viewport: {width: 1500, height: 1000} });
 const page = await context.newPage();
 page.on('pageerror', error => errors.push(String(error)));
@@ -51,9 +58,18 @@ function actions(step) {
       action(step,'addCharacteristicChoice',['characteristics[organism]','Homo sapiens',{id:'NCBITaxon:9606',label:'Homo sapiens',ontology:'ncbitaxon'}]),
       action(step,'addCharacteristicChoice',['characteristics[disease]','normal',{id:'PATO:0000461',label:'normal',ontology:'pato'}]),
       action(step,'addCharacteristicChoice',['characteristics[organism part]','liver',{id:'UBERON:0002107',label:'liver',ontology:'uberon'}]),
-      action(step,'setNoStudyFactors',['Single-sample characterization without comparisons.'])];
+      scenario === 'run-factor-notes'
+        ? action(step,'setFactors',[[{name:'acquisition strategy',enabled:true,scope:'run',values:['DT','DDNL']} ]])
+        : action(step,'setNoStudyFactors',['Single-sample characterization without comparisons.'])];
     case 'samples': return [action(step,'setSourceNames',[['sample_1']]), action(step,'setBiologicalReplicates',[[1]])];
-    case 'runs-files': return [
+    case 'runs-files': return scenario === 'run-factor-notes' ? [
+      action(step,'applyRunsFilesPlan',[{groups:['DT','DDNL'].map(strategy => ({
+        name:strategy, labelConfigId:'lf', channels:[{label:'label free sample',sourceName:'sample_1'}],
+        factorValues:{'acquisition strategy':strategy},
+        files:[{fileName:`${strategy}.raw`,fractionId:1,technicalReplicate:1}],
+      }))}]),
+      action(step,'replaceWithUnassignedFileNames',[['DT.raw','DDNL.raw']]),
+    ] : [
       action(step,'applyRunsFilesPlan',[{groups:[{name:'run_1',labelConfigId:'lf',channels:[{label:'label free sample',sourceName:'sample_1'}],files:[{fileName:'sample_1.raw',fractionId:1,technicalReplicate:1}]}]}]),
       action(step,'replaceWithUnassignedFileNames',[['sample_1.raw']]),
       action(step,'setLabelConfig',['lf']), action(step,'setAcquisitionMethod',['DDA'])];
@@ -74,10 +90,22 @@ await page.route('**/*', async route => {
   if (url.endsWith('/api/chat')) {
     const request = route.request().postDataJSON();
     requests.push(request);
+    if (scenario === 'auto' && request.executionMode === 'auto' && !textOnlyReplySent) {
+      textOnlyReplySent = true;
+      const result = {content:'I have checked the experiment.',actions:[],citations:[],toolCalls:[],nextStep:null};
+      return route.fulfill({contentType:'text/event-stream',body:`data: ${JSON.stringify({type:'done',result})}\n\n`});
+    }
     if (scenario === 'stop') await new Promise(resolve => { releaseRequest = resolve; });
+    if (scenario === 'run-factor-notes' && holdRuns && request.focusStep === 'runs-files') {
+      await new Promise(resolve => { releaseRuns = resolve; });
+    }
     const batch = request.executionMode === 'auto' ? actions(request.focusStep) : [action('setup','setSampleCount',[3])];
     const result = {content:'Evidence checked.',actions:batch,citations:[],toolCalls:[],nextStep:null,
-      automation:request.executionMode === 'auto' ? {status:scenario === 'blocked' ? 'blocked' : 'ready',issues:scenario === 'blocked' ? ['Sample mapping is ambiguous'] : []} : null};
+      automation:request.executionMode === 'auto' ? {
+        status:scenario === 'blocked' ? 'blocked' : 'ready',
+        issues:scenario === 'blocked' ? ['Sample mapping is ambiguous'] : [],
+        notes:scenario === 'run-factor-notes' && request.focusStep === 'samples' ? sampleNotes : [],
+      } : null};
     const frames = [{type:'actions',actions:batch},{type:'done',result}];
     return route.fulfill({contentType:'text/event-stream',body:frames.map(e=>`data: ${JSON.stringify(e)}\n\n`).join('')}).catch(()=>{});
   }
@@ -108,8 +136,17 @@ try {
   scenario = 'auto';
   await page.locator('wizard-ai-panel textarea').fill('Annotate one human liver sample measured by label-free DDA.');
   await page.getByRole('button',{name:'Auto annotate',exact:true}).click();
+  await page.locator('[role="status"]').filter({hasText:'Waiting for your reply'}).waitFor();
+  assert.equal(requests.filter(r=>r.executionMode==='auto').length, 1);
+  assert.equal(await page.locator('wizard-ai-panel textarea').isEnabled(), true);
+  assert.equal((await state()).currentStep, 0);
+  await page.locator('wizard-ai-panel textarea').fill('Continue with the one human liver sample described above.');
+  await page.getByRole('button',{name:'Auto annotate',exact:true}).click();
   await page.getByRole('button',{name:'Download SDRF',exact:true}).waitFor({timeout:20000});
-  assert.deepEqual(requests.filter(r=>r.executionMode==='auto').map(r=>r.focusStep), ['setup','characteristics','samples','runs-files','protocol']);
+  const automaticRequests = requests.filter(r=>r.executionMode==='auto');
+  assert.deepEqual(automaticRequests.map(r=>r.focusStep), ['setup','setup','characteristics','samples','runs-files','protocol']);
+  assert.match(automaticRequests[1].messages.at(-1).content, /Continue with the one human liver sample/);
+  console.log('PASS text-only reply waits for user input and continues only after user explicitly restarts');
   const session = await state();
   assert.equal(session.currentStep, 5);
   assert.equal(session.wizardState.dataFiles[0].fileName, 'sample_1.raw');
@@ -160,6 +197,40 @@ try {
   releaseValidation();
   assert.equal(await page.getByRole('button',{name:'Download SDRF',exact:true}).count(),0);
   console.log('PASS Stop during final validation releases the UI immediately');
+
+  await page.getByRole('button',{name:'Undo auto annotation',exact:true}).click();
+  scenario = 'run-factor-notes';
+  holdRuns = true;
+  const notesStart = requests.length;
+  await page.getByRole('button',{name:'Auto annotate',exact:true}).click();
+  await waitFor(() => !!releaseRuns);
+  assert.equal(await page.locator('.strip-index').innerText(), 'Step 4 of 6');
+  assert.deepEqual(requests.slice(notesStart).map(r=>r.focusStep), ['setup','characteristics','samples','runs-files']);
+  const sampleMessage = (await state()).messages.findLast(m=>m.role==='assistant' && m.focusStep==='samples');
+  assert.deepEqual(sampleMessage.automation.notes,sampleNotes);
+  assert.deepEqual(sampleMessage.automation.issues,[]);
+  assert.equal(await page.locator('.auto-annotation summary').filter({hasText:'Unresolved items'}).count(),0);
+  await page.locator('.auto-annotation summary').filter({hasText:'Annotation notes'}).click();
+  await page.screenshot({path:`${screenshotDir}/sdrf-auto-step4-notes.png`,fullPage:true});
+  console.log('PASS no-op characteristics and run-scoped factor notes advance from step 3 to step 4 without a retry');
+
+  await page.getByRole('button',{name:'Stop auto annotation',exact:true}).click();
+  holdRuns = false;
+  releaseRuns();
+  await page.getByRole('button',{name:'Auto annotate',exact:true}).waitFor();
+  assert.equal(await page.locator('.strip-index').innerText(), 'Step 4 of 6');
+  assert.match(await page.locator('.auto-annotation [role="status"]').innerText(),/Stopped at step 4/);
+  const resumeStart = requests.length;
+  await page.getByRole('button',{name:'Auto annotate',exact:true}).click();
+  await page.getByRole('button',{name:'Download SDRF',exact:true}).waitFor();
+  assert.deepEqual(requests.slice(resumeStart).map(r=>r.focusStep),['runs-files','protocol']);
+  const resumed = await state();
+  assert.equal(resumed.wizardState.samples.length,1);
+  assert.equal(resumed.wizardState.samples[0].biologicalReplicate,1);
+  const assignedRuns = resumed.wizardState.msRuns.filter(run =>
+    resumed.wizardState.dataFiles.some(file => file.runId === run.id));
+  assert.deepEqual(assignedRuns.map(r=>r.factorValues['acquisition strategy']).sort(),['DDNL','DT']);
+  console.log('PASS restarting at step 4 preserves completed steps and assigns the factor per run');
 
   const countBeforeReload = requests.length;
   await page.reload();

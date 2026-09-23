@@ -37,8 +37,8 @@ WIZARD_STEPS_DOC = """The Create New SDRF wizard has 6 steps (new layered UI):
 STEP_GOALS: dict[WizardStepId, str] = {
     "setup": (
         "PRIMARY: recommend the correct template combination — one technology "
-        "(required, usually ms-proteomics), one sample/organism template "
-        "(strongly recommended: human, vertebrates, invertebrates, plants, …), "
+        "(required, usually ms-proteomics), zero or one applicable sample template "
+        "(human, vertebrates, invertebrates, plants, metaproteomics, human-gut, soil, water, …), "
         "and zero or more experiment add-ons (cell-lines, dia-acquisition, "
         "crosslinking, immunopeptidomics, single-cell, …). The templates determine "
         "which characteristics columns become required/recommended on Step 2. "
@@ -48,7 +48,7 @@ STEP_GOALS: dict[WizardStepId, str] = {
         "the count from conditions or rawFileCount alone. "
         "SECONDARY / optional: experiment description — only after templates and "
         "sample count, and only when a short summary clearly helps; never lead with it. "
-        "If defaults (ms-proteomics + human) are already correct, still propose "
+        "If the current template selection is already correct, still propose "
         "confirm/correct template actions so the user sees them as cards."
     ),
     "characteristics": (
@@ -94,7 +94,7 @@ STEP_GOALS: dict[WizardStepId, str] = {
 OPS_BY_STEP_DOC: dict[WizardStepId, str] = {
     "setup": """Priority order (propose in this order; do not lead with description):
   1. setTechnologyTemplate      ["ms-proteomics"]          // REQUIRED
-  2. setSampleTemplate          ["human"]                  // strongly recommended
+  2. setSampleTemplate          ["human"] or [null]        // null clears an inapplicable/default sample template
   3. setExperimentTemplates     [["cell-lines"]]   // nested array! argsJson='[["cell-lines"]]' or '[]'
   4. setSampleCount             [22]   // example only: evidence-backed sources in this accession/scope
      // Only when resolved; reasoning MUST include scope:, design:, files:, uncertainty:
@@ -246,14 +246,31 @@ SETUP_PROCEDURE = """Setup decision procedure (follow in order — STOP after pr
       XML article as a session document. Call read_document on its documentId.
    d. If XML is unavailable or fails, try each pdfUrls candidate with parse_pdf_url
       until one succeeds, then read_document (methods/results/tables).
-   e. If no publication was found, or all candidates fail and no matching document exists, offer PDF
+   e. If XML and Europe PMC PDF candidates are unavailable or fail, and a DOI is
+      available, call find_publication with that DOI and useFallback=true once to
+      discover a Sci-Hub PDF. Try returned candidates with parse_pdf_url, passing
+      the DOI, then read_document. Do not repeat a failed fallback.
+   f. If no publication was found (including fallback), or all sources fail and
+      no matching document exists, offer PDF
       upload and STOP before proposing templates. Explain that the user may continue
       with PRIDE metadata alone. On a later explicit continuation, proceed using PRIDE.
       An abstract is never full-text evidence. Supplementary references are not
       downloaded attachments; request relevant files when sample mappings need them.
 3. Call list_sdrf_templates (by layer if needed) so you use real template ids.
-4. From PRIDE / paper titles/methods keywords pick: technology (one), sample (one),
+4. From PRIDE / paper titles/methods keywords pick: technology (one), sample (zero or one),
    experiment add-ons (0+). TMT/iTRAQ/SILAC are NOT separate templates.
+   - Pure cultures of fungi (including yeast), bacteria, or other organisms without
+     a specialized sample template: use ms-proteomics with sample=null. Explicitly
+     propose setSampleTemplate with argsJson='[null]' to clear any default human
+     selection; do not force plants, invertebrates, or metaproteomics.
+   - Microbial community proteomics: choose metaproteomics, or its applicable
+     environment-specific child human-gut, soil, or water. A child inherits
+     metaproteomics; select the child as the single sample template.
+   - A pure isolate originating from soil/water is not a microbial community.
+     Do not choose community templates solely from the isolation environment.
+   - Culture alone does not imply the cell-lines template. Use it only for an
+     actual cell line supported by the sample evidence.
+   - If pure culture versus community is unclear, ask for that distinction.
 5. Call validate_template_combination; never propose an invalid combo.
 6. Optionally call get_template_columns once per chosen sample/experiment template and
    briefly say which columns Step 2 will unlock (no ontology lookups yet).
@@ -470,7 +487,8 @@ next page, and you pick up from there. Gathering evidence for the whole dataset 
 front is good; proposing values for the whole wizard at once is not.
 
 On setup, gather PRIDE evidence and obtain a session document using the publication
-procedure (XML first, then open PDF candidates, then upload). Propose template and
+procedure (XML first, then Europe PMC PDFs, then Sci-Hub via
+find_publication(useFallback=true), then upload). Propose template and
 sample-count cards for the current step only, then stop. If no full text is available,
 offer upload before proceeding on a later explicit PRIDE-only continuation. Do not run
 ontology or Cellosaurus lookups on setup; those belong to Step 2.
@@ -481,7 +499,9 @@ You handle four kinds of request:
    the user invoked /sdrf-annotate, follow those skill instructions. Otherwise, for a
    ProteomeXchange accession: call get_pride_metadata first, resolve the publication
    with find_publication. Reuse matching session documents; otherwise prefer
-   get_publication_full_text for XML, then parse_pdf_url for open PDF candidates.
+   get_publication_full_text for XML, then parse_pdf_url for Europe PMC PDF candidates.
+   If those fail, call find_publication with the DOI and useFallback=true once for
+   Sci-Hub, then parse_pdf_url with the returned URL and DOI.
    Both return documentId for read_document. Follow the publication gate above
    before proposing actions for the current step only.
 

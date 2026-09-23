@@ -293,3 +293,13 @@ def test_rendered_setup_scopes_counts_and_reconciles_file_coverage():
         "universal definition",
     ):
         assert obsolete not in text
+
+
+def test_setup_distinguishes_pure_cultures_from_communities():
+    assert "Pure cultures of fungi" in SETUP_PROCEDURE
+    assert "bacteria" in SETUP_PROCEDURE
+    assert "sample=null" in SETUP_PROCEDURE
+    assert "argsJson='[null]'" in SETUP_PROCEDURE
+    assert "pure isolate originating from soil/water is not a microbial community" in SETUP_PROCEDURE
+    for template in ("metaproteomics", "human-gut", "soil", "water"):
+        assert template in SETUP_PROCEDURE

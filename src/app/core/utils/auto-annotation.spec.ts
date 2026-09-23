@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { runAutoAnnotation, orderAutoCards, type AutoAnnotationPorts, type AutoTurn } from './auto-annotation.ts';
+import { autoAnnotationStartStep, runAutoAnnotation, orderAutoCards, type AutoAnnotationPorts, type AutoTurn } from './auto-annotation.ts';
 import type { WizardActionCard } from '../models/assistant.ts';
 
 function card(op = 'setSampleCount', value: unknown = 2): WizardActionCard {
   return { id: `${op}-${JSON.stringify(value)}`, status: 'pending', preview: 'before → after',
     action: { step: 'setup', op, args: [value], label: op, confidence: 'high', reasoning: '', citations: [] } };
 }
-const ready = (cards: WizardActionCard[] = []): AutoTurn => ({ cards, report: { status: 'ready', issues: [] } });
+const ready = (cards: WizardActionCard[] = [card('noop')]): AutoTurn => ({ cards, report: { status: 'ready', issues: [] } });
 
 function harness() {
   let state = { value: 0 };
@@ -23,7 +23,7 @@ function harness() {
     fingerprint: () => JSON.stringify(state),
     navigate: step => { navigation.push(step); },
     request: async (step, feedback) => { requests.push({ step, feedback, value: state.value }); return ready(); },
-    apply: async action => { applied.push(action); state.value = Number(action.action.args[0]); },
+    apply: async action => { if (action.action.op === 'noop') return; applied.push(action); state.value = Number(action.action.args[0]); },
     record: (_, applied, error) => { records.push({ applied, error }); },
     errors: () => [],
     validate: async () => { validations++; return { issues: [] }; },
@@ -35,6 +35,124 @@ function harness() {
 }
 
 describe('opt-in automatic annotation orchestration', () => {
+  it('waits for the user after any reply without cards, without requesting again or advancing', async () => {
+    for (const turn of [
+      { cards: [] }, ready([]),
+      { cards: [], report: { status: 'blocked' as const, issues: ['Which organism?'], notes: ['Need user evidence.'] } },
+    ]) {
+      const h = harness();
+      const request = h.ports.request;
+      const notes: string[] = [];
+      h.ports.notes = (_, items) => notes.push(...items);
+      h.ports.request = async (step, feedback) => { await request(step, feedback); return turn; };
+      const result = await h.run();
+      assert.equal(result.status, 'waiting');
+      assert.deepEqual(result.issues, turn.report?.issues || []);
+      assert.deepEqual(notes, turn.report?.notes || []);
+      assert.equal(h.requests.length, 1);
+      assert.equal(h.applied.length, 0);
+      assert.equal(h.records.length, 0);
+      assert.equal(h.validations(), 0);
+      assert.deepEqual(h.navigation, [0]);
+    }
+  });
+
+  it('keeps completed steps when waiting and continues only on an explicit new run', async () => {
+    const h = harness();
+    const request = h.ports.request;
+    h.ports.request = async (step, feedback) => {
+      await request(step, feedback);
+      return step === 1 ? { cards: [] } : ready([card()]);
+    };
+    assert.equal((await h.run()).status, 'waiting');
+    assert.equal(h.state().value, 2);
+    assert.deepEqual(h.requests.map(r => r.step), [0, 1]);
+    h.ports.request = request;
+    const start = autoAnnotationStartStep(h.navigation.at(-1)!, h.ports.errors);
+    assert.equal((await runAutoAnnotation(h.ports, h.controller.signal, start)).status, 'complete');
+    assert.deepEqual(h.requests.map(r => r.step), [0, 1, 1, 2, 3, 4]);
+  });
+
+  it('does not request cards after Stop or overwrite edits made during a text-only reply', async () => {
+    for (const stop of [true, false]) {
+      const h = harness();
+      const request = h.ports.request;
+      h.ports.request = async (step, feedback) => {
+        await request(step, feedback);
+        if (stop) h.controller.abort(); else h.state().value = 99;
+        return { cards: [] };
+      };
+      assert.equal((await h.run()).status, stop ? 'stopped' : 'blocked');
+      assert.equal(h.requests.length, 1);
+      assert.equal(h.applied.length, 0);
+    }
+  });
+
+  it('advances from Sample Values to Runs & Files once, retaining non-blocking notes', async () => {
+    const h = harness();
+    const request = h.ports.request;
+    const notes: { step: number; notes: string[] }[] = [];
+    h.ports.notes = (step, items) => { if (items.length) notes.push({ step, notes: items }); };
+    h.ports.request = async (step, feedback) => {
+      await request(step, feedback);
+      return step === 2 ? {
+        cards: [card()], report: { status: 'ready', issues: [], notes: [
+          'Every characteristic has a single candidate and already matches sample_1; no patch needed.',
+          'Acquisition strategy is run-scoped and will be assigned on Runs & Files.',
+        ] },
+      } : ready();
+    };
+    const start = autoAnnotationStartStep(2, h.ports.errors);
+    assert.equal((await runAutoAnnotation(h.ports, h.controller.signal, start)).status, 'complete');
+    assert.deepEqual(h.requests.map(r => r.step), [2, 3, 4]);
+    assert.ok(h.requests.every(r => r.feedback.length === 0));
+    assert.deepEqual(h.navigation, [2, 3, 4, 5]);
+    assert.equal(notes[0].step, 2);
+    assert.equal(notes[0].notes.length, 2);
+  });
+
+  it('still blocks real sample validation failures alongside informational notes', async () => {
+    const h = harness();
+    const request = h.ports.request;
+    h.ports.request = async (step, feedback) => {
+      await request(step, feedback);
+      return { cards: [card()], report: { status: 'ready', issues: [], notes: ['Run factors belong to step 4.'] } };
+    };
+    h.ports.errors = () => ['sample_1: assign treatment.'];
+    const result = await runAutoAnnotation(h.ports, h.controller.signal, 2);
+    assert.equal(result.status, 'blocked');
+    assert.deepEqual(result.issues, ['sample_1: assign treatment.']);
+    assert.deepEqual(h.navigation, [2]);
+    assert.deepEqual(h.requests[1].feedback, ['sample_1: assign treatment.']);
+  });
+
+  it('restarts a stopped request on its current step rather than replaying setup', async () => {
+    const h = harness();
+    const request = h.ports.request;
+    h.ports.request = async (step, feedback) => {
+      const turn = await request(step, feedback);
+      if (step === 3) h.controller.abort();
+      return turn;
+    };
+    assert.equal((await runAutoAnnotation(h.ports, h.controller.signal, 2)).status, 'stopped');
+    assert.equal(h.navigation.at(-1), 3);
+    h.ports.request = request;
+    const resumed = new AbortController();
+    const start = autoAnnotationStartStep(h.navigation.at(-1)!, h.ports.errors);
+    assert.equal((await runAutoAnnotation(h.ports, resumed.signal, start)).status, 'complete');
+    assert.deepEqual(h.requests.map(r => r.step), [2, 3, 3, 4]);
+    assert.equal(h.navigation.includes(0), false);
+  });
+
+  it('checks earlier requirements before resuming and allows direct final revalidation', async () => {
+    assert.equal(autoAnnotationStartStep(3, step => step === 1 ? ['Missing required characteristic'] : []), 1);
+    assert.equal(autoAnnotationStartStep(3, () => []), 3);
+    const h = harness();
+    assert.equal((await runAutoAnnotation(h.ports, h.controller.signal, autoAnnotationStartStep(5, () => []))).status, 'complete');
+    assert.equal(h.requests.length, 0);
+    assert.equal(h.validations(), 1);
+  });
+
   it('walks all five steps and validates before entering review', async () => {
     const h = harness();
     assert.equal((await h.run()).status, 'complete');
@@ -148,7 +266,7 @@ describe('opt-in automatic annotation orchestration', () => {
     const request = h.ports.request;
     h.ports.request = async (step, feedback) => {
       await request(step, feedback);
-      return { cards: [], report: { status: 'blocked', issues: ['Ambiguous sample mapping'] } };
+      return { cards: [card()], report: { status: 'blocked', issues: ['Ambiguous sample mapping'] } };
     };
     const result = await h.run();
     assert.equal(result.status, 'blocked');

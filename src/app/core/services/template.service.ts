@@ -769,8 +769,6 @@ export class TemplateService {
       const tech = this.getTemplateInfo(technologyTemplate);
       if (tech && !tech.usableAlone) {
         errors.push(`"${technologyTemplate}" cannot be used alone; select a sample template.`);
-      } else {
-        warnings.push('No sample template selected. Organism-specific columns may be incomplete.');
       }
     }
 

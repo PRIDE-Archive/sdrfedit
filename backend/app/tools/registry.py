@@ -12,6 +12,7 @@ import hashlib
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from ..config import get_settings
 from ..parsing.base import ParsedDocument, PdfParseError
 from ..parsing.factory import get_pdf_parser
 from ..session import get_session_store
@@ -39,11 +40,15 @@ async def _get_raw_files(args: dict, _session: str) -> Any:
 
 async def _find_publication(args: dict, _session: str) -> Any:
     result = await literature.lookup_publication(
-        pmid=args.get("pmid"), doi=args.get("doi"), title=args.get("title")
+        pmid=args.get("pmid"), doi=args.get("doi"), title=args.get("title"),
+        use_fallback=args.get("useFallback", False)
     )
+    for candidate in result.get("pdfCandidates", []):
+        if candidate.get("source") == "scihub":
+            get_session_store().remember_pdf_source(_session, candidate["url"], "scihub")
     # Discovery returns identifiers and acquisition routes, not article content
     # or the upstream search response. Keep license/version for PDF acquisition.
-    fields = ("found", "status", "pmid", "pmcid", "doi", "title", "url", "fullTextAvailable")
+    fields = ("found", "status", "pmid", "pmcid", "doi", "title", "url", "fullTextAvailable", "fallbackAvailable", "fallbackAttempted")
     compact = {key: result[key] for key in fields if result.get(key) is not None and result.get(key) != ""}
     if result.get("pdfCandidates"):
         compact["pdfCandidates"] = result["pdfCandidates"]
@@ -88,7 +93,7 @@ async def _get_full_text(args: dict, session_id: str) -> Any:
         result = await literature.fetch_full_text(pmcid)
     except ToolHttpError as error:
         return {"ok": False, "status": "download_failed", "error": str(error),
-                "nextStep": "Try each open pdfUrls candidate with parse_pdf_url before offering upload."}
+                "nextStep": "Try each Europe PMC PDF candidate with parse_pdf_url, then find_publication with the DOI and useFallback=true for Sci-Hub if not already attempted; offer upload if all fail."}
     sections = result.pop("allSections")
     document = ParsedDocument(markdown="\n\n".join(f"## {k}\n{v}" for k, v in sections.items()),
                               sections=sections, parser="europepmc-jats")
@@ -149,10 +154,10 @@ async def _parse_pdf_url(args: dict, session_id: str) -> Any:
                                     and stored.metadata.get("version") == args.get("version")):
             return _document_result(stored, True)
     try:
-        data, path = await cached_download(url, "pdf")
+        data, path = await cached_download(url, "pdf", trust_env=_pdf_trust_env(session_id, url))
     except ToolHttpError as error:
         return {"ok": False, "status": "download_failed", "error": str(error),
-                "nextStep": "Try the next open PDF candidate; offer upload if all fail."}
+                "nextStep": "Try the next PDF candidate. After Europe PMC candidates fail, call find_publication with the DOI and useFallback=true if not already attempted. After Sci-Hub fails, offer upload."}
     try:
         document = await get_pdf_parser().parse_bytes(data, "paper.pdf")
         if not document.markdown.strip():
@@ -169,10 +174,16 @@ async def _parse_pdf_url(args: dict, session_id: str) -> Any:
 
 async def _check_pdf_reachable(args: dict, _session: str) -> Any:
     try:
-        data, _ = await cached_download(args["url"], "pdf")
+        data, _ = await cached_download(args["url"], "pdf", trust_env=_pdf_trust_env(_session, args["url"]))
     except ToolHttpError as error:
         return {"reachable": False, "isPdf": False, "error": str(error)}
     return {"reachable": True, "isPdf": True, "bytes": len(data), "contentType": "application/pdf"}
+
+
+def _pdf_trust_env(session_id: str, url: str) -> bool:
+    if get_session_store().pdf_source(session_id, url) == "scihub":
+        return get_settings().scihub_trust_env
+    return True
 
 
 async def _list_documents(_args: dict, session_id: str) -> Any:
@@ -460,7 +471,9 @@ TOOLS: list[dict[str, Any]] = [
             "name": "find_publication",
             "description": (
                 "Resolve a paper by PMID, DOI, or title through Europe PMC. Reports whether "
-                "open full text exists and which PDF URLs are available."
+                "open full text exists and which PDF URLs are available. Only after Europe PMC "
+                "XML/PDF sources fail, set useFallback=true with the resolved DOI to discover "
+                "a Sci-Hub PDF. Do not repeat a failed fallback; offer upload instead."
             ),
             "parameters": {
                 "type": "object",
@@ -468,6 +481,7 @@ TOOLS: list[dict[str, Any]] = [
                     "pmid": {"type": "string"},
                     "doi": {"type": "string"},
                     "title": {"type": "string"},
+                    "useFallback": {"type": "boolean", "description": "Default false. Set true only after primary XML/PDF sources fail; requires DOI."},
                 },
             },
         },
@@ -517,7 +531,7 @@ TOOLS: list[dict[str, Any]] = [
         "declaration": {
             "name": "parse_pdf_url",
             "description": (
-                "Download and validate an open PDF candidate, cache the original, and parse it "
+                "Download and validate a discovered PDF candidate, cache the original, and parse it "
                 "with MinerU into a session document. Use after XML is unavailable or fails. "
                 "Try alternate candidates on failure before asking for upload. "
                 "Pass PMID/DOI and license/version from discovery when available."
@@ -737,7 +751,7 @@ TOOLS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "technology": {"type": "string"},
-                    "sample": {"type": "string"},
+                    "sample": {"type": ["string", "null"], "description": "Optional sample template; null for generic samples without a specialized template."},
                     "experiments": {"type": "array", "items": {"type": "string"}},
                 },
             },

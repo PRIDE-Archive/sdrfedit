@@ -53,7 +53,10 @@ export interface WizardActionCard {
 
 export interface AutomationReport {
   status: 'ready' | 'blocked';
+  /** Blocking problems for the current step only. */
   issues: string[];
+  /** Informational explanations never trigger retries. Optional for older servers. */
+  notes?: string[];
 }
 
 /** One tool call in the timeline — may still be running. */
@@ -133,6 +136,8 @@ export interface AssistantChatMessage {
   error?: string;
   /** Backend debug info from the turn's `done.trace` (propose rejects, etc.). */
   trace?: Record<string, unknown> | null;
+  /** Preserve the completion decision separately from the conversational text. */
+  automation?: AutomationReport | null;
 }
 
 /** One persisted chat the user can reopen without logging in. */

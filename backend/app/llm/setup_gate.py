@@ -85,6 +85,9 @@ class SetupGate:
             if self.pride_only and action.step == "setup":
                 action = action.model_copy(update={"confidence": "low"})
             if action.op in template_ops:
+                if action.op == "setSampleTemplate" and action.args == [None]:
+                    kept.append(action)
+                    continue
                 names = action.args[0] if action.op == "setExperimentTemplates" else action.args
                 if any(not isinstance(n, str) or n not in entries or entries[n].get("layer") not in template_ops[action.op] for n in names):
                     rejected.append(f"{action.op}: unknown template or wrong template layer.")

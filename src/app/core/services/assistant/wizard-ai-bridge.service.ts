@@ -161,7 +161,7 @@ export class WizardAiBridgeService {
         case 'setTechnologyTemplate':
           return change(state.technologyTemplate, asString(args[0]));
         case 'setSampleTemplate':
-          return change(state.sampleTemplate, asString(args[0]));
+          return change(state.sampleTemplate, args[0] === null ? "(none — generic sample)" : asString(args[0]));
         case 'setExperimentTemplates':
           return change((state.experimentTemplates || []).join(', ') || '(none)', asStringArray(args[0]).join(', '));
         case 'setSampleCount':
@@ -319,7 +319,8 @@ export class WizardAiBridgeService {
     signal?.throwIfAborted();
     const args = action.args || [];
     if (['setTechnologyTemplate', 'setSampleTemplate', 'setExperimentTemplates'].includes(action.op)) {
-      const names = action.op === 'setExperimentTemplates' ? asStringArray(args[0]) : [asString(args[0])];
+      const names = action.op === 'setSampleTemplate' && args.length === 1 && args[0] === null
+        ? [] : action.op === 'setExperimentTemplates' ? asStringArray(args[0]) : [asString(args[0])];
       const allowed = action.op === 'setTechnologyTemplate' ? ['technology'] : action.op === 'setSampleTemplate' ? ['sample'] : ['experiment', 'sample'];
       for (const name of names) {
         const info = this.templates.getTemplateInfo(name);
@@ -337,7 +338,7 @@ export class WizardAiBridgeService {
         return;
 
       case 'setSampleTemplate':
-        this.wizardState.setSampleTemplate(asString(args[0]));
+        this.wizardState.setSampleTemplate(args[0] === null ? null : asString(args[0]));
         await this.wizardState.refreshCharacteristicColumns(signal);
         return;
 

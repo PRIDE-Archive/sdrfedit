@@ -179,18 +179,21 @@ def test_extract_markdown_from_zip_picks_the_largest_markdown():
 
 def test_literature_next_step_prefers_xml_session_document():
     for has_pdf in (True, False):
-        message = _next_step(True, True, has_pdf).lower()
+        message = _next_step(True, has_pdf, True).lower()
         assert "get_publication_full_text first" in message
         assert "session document" in message
         assert "read_document" in message
 
 
 def test_literature_next_step_non_oa_asks_upload_and_stop():
-    for has_pmcid, has_pdf in ((True, False), (False, False)):
-        message = _next_step(False, has_pmcid, has_pdf).lower()
-        assert "list_documents" in message
-        assert "upload" in message
-        assert "stop" in message or "do not propose" in message
+    message = _next_step(False, False, False).lower()
+    assert "list_documents" in message
+    assert "upload" in message
+    assert "stop" in message or "do not propose" in message
+
+    fallback_message = _next_step(False, False, True).lower()
+    assert "usefallback=true" in fallback_message
+    assert "sci-hub" in fallback_message
 
     # Non-OA but with pdfUrls still goes through MinerU parse.
     pdf_message = _next_step(False, True, True).lower()
