@@ -29,6 +29,9 @@ import {
   shouldShowOnSampleValuesStep,
   createDefaultSample,
   normalizeFactor,
+  getSpecialtyCharacteristicKey,
+  getQuickPickSuggestions,
+  isSampleNameMirrorColumn,
 } from '../../../core/models/wizard';
 
 type BioRepMode = 'sequential' | 'paired' | 'allOnes';
@@ -83,6 +86,39 @@ function parseBioRepNumbers(text: string): number[] {
       <section class="setup-panel">
         <div class="setup-row">
           <div class="setup-row-head">
+            <h5>Biological replicates</h5>
+            <span class="setup-hint">Numbers only — spaces / commas / new lines</span>
+          </div>
+          <div class="quick-chips">
+            <button type="button" class="chip-btn" (click)="applyBioRepPreset('sequential')">1, 2, 3…</button>
+            <button type="button" class="chip-btn" (click)="applyBioRepPreset('paired')">1, 1, 2, 2…</button>
+            <button type="button" class="chip-btn" (click)="applyBioRepPreset('allOnes')">1, 1, 1, 1…</button>
+            <button type="button" class="chip-btn ghost" (click)="copyFirstToAll('biologicalReplicate')">Copy first → all</button>
+          </div>
+          <div class="setup-row-body">
+            <textarea
+              class="setup-textarea"
+              rows="1"
+              [ngModel]="customBioRepText()"
+              (ngModelChange)="customBioRepText.set($event)"
+              placeholder="1 1 2 2 3 3  or  1,2,1,2"
+            ></textarea>
+            <button
+              type="button"
+              class="card-btn primary compact"
+              (click)="applyCustomBioReps()"
+              [disabled]="parsedBioReps().length === 0"
+            >
+              Apply numbers
+              @if (parsedBioReps().length > 0) {
+                <span class="btn-meta">({{ parsedBioReps().length }})</span>
+              }
+            </button>
+          </div>
+        </div>
+
+        <div class="setup-row">
+          <div class="setup-row-head">
             <h5>Sample names</h5>
             <span class="setup-hint">Separate with spaces, commas, or new lines</span>
           </div>
@@ -118,39 +154,6 @@ function parseBioRepNumbers(text: string): number[] {
               Apply names
               @if (parsedNames().length > 0) {
                 <span class="btn-meta">({{ parsedNames().length }})</span>
-              }
-            </button>
-          </div>
-        </div>
-
-        <div class="setup-row">
-          <div class="setup-row-head">
-            <h5>Biological replicates</h5>
-            <span class="setup-hint">Numbers only — spaces / commas / new lines</span>
-          </div>
-          <div class="quick-chips">
-            <button type="button" class="chip-btn" (click)="applyBioRepPreset('sequential')">1, 2, 3…</button>
-            <button type="button" class="chip-btn" (click)="applyBioRepPreset('paired')">1, 1, 2, 2…</button>
-            <button type="button" class="chip-btn" (click)="applyBioRepPreset('allOnes')">1, 1, 1, 1…</button>
-            <button type="button" class="chip-btn ghost" (click)="copyFirstToAll('biologicalReplicate')">Copy first → all</button>
-          </div>
-          <div class="setup-row-body">
-            <textarea
-              class="setup-textarea"
-              rows="1"
-              [ngModel]="customBioRepText()"
-              (ngModelChange)="customBioRepText.set($event)"
-              placeholder="1 1 2 2 3 3  or  1,2,1,2"
-            ></textarea>
-            <button
-              type="button"
-              class="card-btn primary compact"
-              (click)="applyCustomBioReps()"
-              [disabled]="parsedBioReps().length === 0"
-            >
-              Apply numbers
-              @if (parsedBioReps().length > 0) {
-                <span class="btn-meta">({{ parsedBioReps().length }})</span>
               }
             </button>
           </div>
@@ -350,7 +353,17 @@ function parseBioRepNumbers(text: string): number[] {
                 </td>
                 @for (col of displayColumns(); track col.name) {
                   <td class="col-override">
-                    @if (choiceCount(col.name) <= 1) {
+                    @if (isSampleNameColumn(col.name)) {
+                      <span class="readonly-value">{{ sample.sourceName || '—' }}</span>
+                    } @else if (isFreeTextColumn(col.name)) {
+                      <input
+                        type="text"
+                        class="cell-input"
+                        [ngModel]="sampleValue(sample, col.name)"
+                        (ngModelChange)="setValue(i, col.name, $event)"
+                        placeholder="e.g. 45Y"
+                      />
+                    } @else if (choiceCount(col.name) <= 1 && !isAlwaysEditableSelect(col.name)) {
                       <span class="readonly-value">{{ sampleValue(sample, col.name) || '—' }}</span>
                     } @else {
                       <select
@@ -360,8 +373,8 @@ function parseBioRepNumbers(text: string): number[] {
                         (focus)="onBatchColumnChange(col.name)"
                       >
                         <option value="">Select…</option>
-                        @for (c of choices(col.name); track c.value) {
-                          <option [value]="c.value">{{ c.value }}</option>
+                        @for (c of selectOptionsFor(col); track c) {
+                          <option [value]="c">{{ c }}</option>
                         }
                       </select>
                     }
@@ -974,6 +987,28 @@ export class SampleValuesComponent implements OnInit {
     return sample.characteristicValues?.[columnName] || '';
   }
 
+  /** "characteristics[sample name]" always mirrors Source Name, never a candidate pick. */
+  isSampleNameColumn(columnName: string): boolean {
+    return isSampleNameMirrorColumn(columnName);
+  }
+
+  /** Age is naturally per-sample free text -- never lock it behind a candidate list. */
+  isFreeTextColumn(columnName: string): boolean {
+    return getSpecialtyCharacteristicKey(columnName) === 'age';
+  }
+
+  /** Sex has a small fixed vocabulary -- always let it be edited per sample. */
+  isAlwaysEditableSelect(columnName: string): boolean {
+    return getSpecialtyCharacteristicKey(columnName) === 'sex';
+  }
+
+  /** Step2 candidates plus any quick-pick defaults, so sex/etc. always has options. */
+  selectOptionsFor(col: WizardCharacteristicColumnMeta): string[] {
+    const fromChoices = this.choices(col.name).map(c => c.value);
+    const quickPicks = getQuickPickSuggestions(col.name, col);
+    return [...new Set([...fromChoices, ...quickPicks])];
+  }
+
   factorSampleValue(sample: WizardSampleEntry, factorName: string): string {
     return sample.factorValues?.[factorName] || '';
   }
@@ -1060,6 +1095,10 @@ export class SampleValuesComponent implements OnInit {
   addSample(): void {
     this.wizardState.addSample();
     this.wizardState.syncCharacteristicAssignments();
+    // Without this, a single-candidate factor value only ever landed on the
+    // samples that existed at the last step transition -- one added here via
+    // "+ Add sample" stayed blank until the user went back and forward again.
+    this.wizardState.syncFactorAssignments();
   }
 
   removeSample(index: number): void {

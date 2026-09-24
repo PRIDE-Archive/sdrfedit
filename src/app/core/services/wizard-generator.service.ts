@@ -21,6 +21,7 @@ import {
   hasCellLinesExperiment,
   getSpecialtyCharacteristicKey,
   isWizardSkippedCharacteristic,
+  isSampleNameMirrorColumn,
   materializeSampleFieldsFromChoices,
   buildWizardExpansionRows,
   buildModifiersFromExpansion,
@@ -703,8 +704,12 @@ export class WizardGeneratorService {
   ): SdrfColumn {
     const def = state.dynamicColumnDefaults.find(d => d.columnName === columnName);
     const defaultValue = def?.value?.trim() || 'not available';
+    const mirrorsSourceName = isSampleNameMirrorColumn(columnName);
     const { modifiers } = this.modsFromRows(row => {
       const sample = this.findSample(state, row.sampleIndex);
+      // Per spec, characteristics[sample name] always equals this row's own
+      // Source Name -- never a shared candidate value copied onto every row.
+      if (mirrorsSourceName) return sample?.sourceName?.trim() || defaultValue;
       const override = sample?.customCharacteristics?.[columnName]?.trim();
       const fromChoices = sample?.characteristicValues?.[columnName]?.trim();
       return override || fromChoices || defaultValue;

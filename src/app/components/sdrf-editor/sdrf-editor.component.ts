@@ -3694,11 +3694,21 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
   // ============ Row Management Methods ============
 
   /**
+   * Default value for a brand-new row's cell. Source/sample name columns are
+   * the row's identifier -- leaving them blank produced a row that looked
+   * added but was silently missing its name in the exported file.
+   */
+  private defaultValueForNewRow(columnName: string, rowNumber: number): string {
+    return this.getColumnTypeClass(columnName) === 'source' ? `sample_${rowNumber}` : '';
+  }
+
+  /**
    * Add a new row at the end of the table.
    */
   addRowAtEnd(): void {
     const t = this.table();
     if (!t) return;
+    const newRowNumber = t.sampleCount + 1;
 
     // Create new table with one more sample
     const newTable: SdrfTable = {
@@ -3713,8 +3723,8 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
             modifiers: [
               ...col.modifiers,
               {
-                samples: `${t.sampleCount + 1}`,
-                value: '',
+                samples: `${newRowNumber}`,
+                value: this.defaultValueForNewRow(col.name, newRowNumber),
               },
             ],
           };
@@ -3761,7 +3771,7 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
           modifiers: [
             {
               samples: `${position}`,
-              value: '',
+              value: this.defaultValueForNewRow(col.name, position),
             },
           ],
         };
@@ -3785,7 +3795,7 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
       // Add new row modifier
       newModifiers.push({
         samples: `${position}`,
-        value: '',
+        value: this.defaultValueForNewRow(col.name, position),
       });
 
       return { ...col, modifiers: newModifiers };

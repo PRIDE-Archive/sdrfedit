@@ -204,7 +204,8 @@ export class WizardStateService {
       c =>
         c.requirement === 'required' &&
         !isWizardSkippedCharacteristic(c.name) &&
-        getSpecialtyCharacteristicKey(c.name) !== 'material type'
+        getSpecialtyCharacteristicKey(c.name) !== 'material type' &&
+        getSpecialtyCharacteristicKey(c.name) !== 'sample name'
     );
 
     const characteristicsOk =

@@ -172,7 +172,8 @@ export type SpecialtyCharacteristicKey =
   | 'cell line'
   | 'strain/breed'
   | 'developmental stage'
-  | 'material type';
+  | 'material type'
+  | 'sample name';
 
 /** Lightweight column meta stored on wizard state for Step2/3/generator. */
 export interface WizardCharacteristicColumnMeta {
@@ -212,14 +213,24 @@ export function getSpecialtyCharacteristicKey(
     'strain/breed',
     'developmental stage',
     'material type',
+    'sample name',
   ];
   return (known.find(k => k === inner) as SpecialtyCharacteristicKey) || null;
+}
+
+/**
+ * "characteristics[sample name]" (metaproteomics/metagenomics templates) is not
+ * a candidate list like other characteristics -- per the SDRF spec it always
+ * mirrors the sample's own Source Name, so it's never edited via choices.
+ */
+export function isSampleNameMirrorColumn(columnName: string): boolean {
+  return getSpecialtyCharacteristicKey(columnName) === 'sample name';
 }
 
 /** Columns suitable for per-sample override on Step3 (organism stays global). */
 export function isPerSampleOverrideCharacteristic(columnName: string): boolean {
   const key = getSpecialtyCharacteristicKey(columnName);
-  if (key === 'organism' || key === 'material type') return false;
+  if (key === 'organism' || key === 'material type' || key === 'sample name') return false;
   if (isWizardSkippedCharacteristic(columnName)) return false;
   return isCharacteristicsColumn(columnName);
 }
@@ -431,6 +442,7 @@ export function shouldShowOnSampleValuesStep(
   if (!isCharacteristicsColumn(columnName)) return false;
   const key = getSpecialtyCharacteristicKey(columnName);
   if (key === 'material type') return false;
+  if (key === 'sample name') return true;
   if (key === 'organism') return choiceCount > 1;
   return choiceCount >= 1;
 }

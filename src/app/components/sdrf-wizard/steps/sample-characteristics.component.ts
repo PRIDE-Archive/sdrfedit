@@ -100,24 +100,50 @@ function suggestionToTerm(s: OntologySuggestion): OntologyTerm {
         }
       </section>
 
+      <section class="column-section">
+        <button type="button" class="section-toggle" (click)="showOptional.set(!showOptional())">
+          <span class="badge optional">Optional</span>
+          <span class="count">{{ optionalColumns().length }}</span>
+          <span class="chevron">{{ showOptional() ? '−' : '+' }}</span>
+        </button>
+        @if (showOptional()) {
+          @if (optionalColumns().length === 0) {
+            <div class="empty">
+              No optional characteristics for this selection. See the
+              <a href="https://sdrf.quantms.org/specification.html" target="_blank" rel="noopener">SDRF specification</a>
+              for the full column list.
+            </div>
+          } @else {
+            @for (col of optionalColumns(); track col.name) {
+              <ng-container *ngTemplateOutlet="fieldTpl; context: { $implicit: col, required: false }" />
+            }
+          }
+        }
+      </section>
+
       <wizard-factor-values />
 
       @if (!wizardState.isStep2Valid()) {
         <div class="validation-message">
           <span class="warning-icon">!</span>
           <div>
-            Add at least one candidate for each required characteristic, and define
-            at least one study factor with candidate values.
+            @if (missingRequiredColumns().length > 0) {
+              Still missing a candidate for:
+              {{ missingRequiredColumnNames() }}.
+            } @else if (!wizardState.isFactorsDefined()) {
+              Define at least one study factor with candidate values below.
+            }
           </div>
         </div>
       }
     </div>
 
     <ng-template #fieldTpl let-col let-required="required">
-      <div class="form-section" [attr.data-column]="col.name">
+      <div class="form-section" [attr.data-column]="col.name" [class.missing]="required && isMissingRequired(col)">
         <label class="form-label">
           {{ columnTitle(col) }}
           @if (required) { <span class="req">*</span> }
+          @if (required && isMissingRequired(col)) { <span class="missing-tag">Needs a value</span> }
           <span class="help-text">{{ col.description || hintFor(col) }}</span>
         </label>
 
@@ -207,9 +233,16 @@ function suggestionToTerm(s: OntologySuggestion): OntologyTerm {
     }
     .badge.required { background: #fee2e2; color: #991b1b; }
     .badge.recommended { background: #ffedd5; color: #9a3412; }
+    .badge.optional { background: #e0e7ff; color: #3730a3; }
     .count { color: #9ca3af; font-weight: 500; }
     .form-section { margin-bottom: 14px; padding: 12px; border: 1px solid #f3f4f6; border-radius: 10px; background: #fff; }
+    .form-section.missing { border-color: #fca5a5; background: #fef2f2; }
     .form-label { display: block; font-size: 13px; font-weight: 600; color: #111827; margin-bottom: 6px; }
+    .missing-tag {
+      display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px;
+      background: #fee2e2; color: #991b1b; font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.03em; vertical-align: middle;
+    }
     .help-text { display: block; font-size: 12px; font-weight: 400; color: #6b7280; margin-top: 2px; }
     .req { color: #ef4444; }
     .autocomplete-container { position: relative; display: flex; gap: 8px; }
@@ -267,23 +300,48 @@ export class SampleCharacteristicsComponent implements OnInit {
   readonly loading = signal(false);
   readonly loadError = signal<string | null>(null);
   readonly showRecommended = signal(false);
+  readonly showOptional = signal(false);
 
   readonly activeColumn = signal<string | null>(null);
   readonly searchResults = signal<OntologyTerm[]>([]);
   private readonly searchMap = signal<Record<string, string>>({});
 
+  private isCandidateListColumn(c: WizardCharacteristicColumnMeta): boolean {
+    if (isWizardSkippedCharacteristic(c.name)) return false;
+    const key = getSpecialtyCharacteristicKey(c.name);
+    // Material type is derived from the template; sample name always mirrors
+    // Source Name (Step 3) -- neither is a user-picked candidate list.
+    return key !== 'material type' && key !== 'sample name';
+  }
+
   readonly requiredColumns = computed(() =>
     (this.state().characteristicColumns || []).filter(
-      c => c.requirement === 'required' && !isWizardSkippedCharacteristic(c.name)
-        && getSpecialtyCharacteristicKey(c.name) !== 'material type'
+      c => c.requirement === 'required' && this.isCandidateListColumn(c)
     )
   );
   readonly recommendedColumns = computed(() =>
     (this.state().characteristicColumns || []).filter(
-      c => c.requirement === 'recommended' && !isWizardSkippedCharacteristic(c.name)
-        && getSpecialtyCharacteristicKey(c.name) !== 'material type'
+      c => c.requirement === 'recommended' && this.isCandidateListColumn(c)
     )
   );
+  readonly optionalColumns = computed(() =>
+    (this.state().characteristicColumns || []).filter(
+      c => c.requirement === 'optional' && this.isCandidateListColumn(c)
+    )
+  );
+
+  /** Required columns still missing at least one candidate -- for the highlighted list. */
+  readonly missingRequiredColumns = computed(() =>
+    this.requiredColumns().filter(c => this.choices(c.name).length === 0)
+  );
+
+  isMissingRequired(col: WizardCharacteristicColumnMeta): boolean {
+    return this.choices(col.name).length === 0;
+  }
+
+  missingRequiredColumnNames(): string {
+    return this.missingRequiredColumns().map(c => this.columnTitle(c)).join(', ');
+  }
 
   ngOnInit(): void {
     this.wizardState.ensureDefaultFactors();
