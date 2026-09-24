@@ -10,3 +10,9 @@ numpy>=1.26.0
 beautifulsoup4>=4.12.3
 lxml>=5.2.0
 PyYAML>=6.0.1
+openpyxl>=3.1.5
+xlrd>=2.0.1
+
+# Official template schema and dependency version ranges
+jsonschema>=4.23.0
+semantic-version>=2.10.0

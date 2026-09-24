@@ -17,9 +17,9 @@ PRIDE_API_BASE = "https://www.ebi.ac.uk/pride/ws/archive/v3"
 PROJECT_URL = "https://www.ebi.ac.uk/pride/archive/projects/{accession}"
 
 RAW_EXTENSIONS = (
-    ".raw", ".wiff", ".wiff.scan", ".d", ".d.zip", ".mzml", ".mzxml", ".mzml.gz",
-    ".baf", ".tdf", ".tdf_bin", ".lcd", ".qgd", ".dat", ".pkl", ".ibd",
+    ".raw", ".wiff", ".wiff2", ".d", ".baf", ".lcd", ".qgd",
 )
+RAW_COMPRESSION_SUFFIXES = (".tar.gz", ".tar", ".zip", ".gz")
 ACCESSION_RE = re.compile(r"\b(PXD|PRD|MSV|IPX)\d{4,}\b", re.IGNORECASE)
 
 
@@ -104,9 +104,18 @@ async def fetch_project(accession: str) -> dict:
 
 
 def _is_raw(name: str, category: str | None) -> bool:
-    if (category or "").upper() == "RAW":
-        return True
+    # An explicit repository classification takes precedence over the filename.
+    # In particular, Mascot .dat files are SEARCH outputs, not acquisitions.
+    normalized_category = (category or "").strip().upper()
+    if normalized_category:
+        return normalized_category == "RAW"
+    # With no classification, only infer unambiguous instrument formats.
+    # Open formats can also be processed peak lists; sidecars are not runs.
     lowered = name.lower()
+    for suffix in RAW_COMPRESSION_SUFFIXES:
+        if lowered.endswith(suffix):
+            lowered = lowered[:-len(suffix)]
+            break
     return any(lowered.endswith(ext) for ext in RAW_EXTENSIONS)
 
 

@@ -214,44 +214,6 @@ const DEFAULT_WIDTH = 400;
             </div>
           </div>
 
-          <section class="auto-annotation" aria-label="Automatic annotation">
-            <div class="auto-controls">
-              @if (autoAnnotation.active()) {
-                <button class="btn-secondary" [disabled]="autoAnnotation.stopping()" (click)="autoAnnotation.stop()">Stop auto annotation</button>
-              } @else {
-                <button class="btn-secondary" [disabled]="!canStartAuto()" (click)="startAutoAnnotation()">Auto annotate</button>
-              }
-              @if (autoAnnotation.canUndo()) {
-                <button class="btn-secondary" [disabled]="busy()" (click)="undoAutoAnnotation()">Undo auto annotation</button>
-              }
-              @if (autoAnnotation.downloadable()) {
-                <button class="btn-secondary" (click)="autoAnnotation.download()">{{ autoAnnotation.status() === 'complete' ? 'Download SDRF' : 'Download draft' }}</button>
-              }
-            </div>
-            @if (autoAnnotation.status() === 'idle') {
-              <p>Use the experiment in your message, attached paper or current conversation. Auto annotate continues from the current step, checking earlier requirements, and applies new suggestions without card approval.</p>
-            } @else {
-              <p role="status" aria-live="polite">{{ autoAnnotation.resultChanged() ? 'Wizard changed since automatic annotation completed. Run again to generate and validate the latest values.' : autoAnnotation.progress() }}</p>
-              @if (autoAnnotation.active()) { <p>Wizard editing is paused during this run. Stop to return to manual editing.</p> }
-              @if (autoAnnotation.status() === 'complete' && !autoAnnotation.resultChanged()) { <p>Template validation passed; ontology lookup was skipped, as in the existing review workflow.</p> }
-              @if (autoAnnotation.issues().length) {
-                <details open><summary>Unresolved items ({{ autoAnnotation.issues().length }})</summary>
-                  <ul>@for (issue of autoAnnotation.issues(); track $index) { <li>{{ issue }}</li> }</ul>
-                </details>
-              }
-              @if (autoAnnotation.warnings().length) {
-                <details><summary>Validation warnings ({{ autoAnnotation.warnings().length }})</summary>
-                  <ul>@for (warning of autoAnnotation.warnings(); track $index) { <li>{{ warning }}</li> }</ul>
-                </details>
-              }
-              @if (autoAnnotation.notes().length) {
-                <details><summary>Annotation notes ({{ autoAnnotation.notes().length }})</summary>
-                  <ul>@for (note of autoAnnotation.notes(); track $index) { <li>{{ note }}</li> }</ul>
-                </details>
-              }
-            }
-          </section>
-
           <div class="messages" #scroller (scroll)="onMessagesScroll()"
             (wheel)="onMessagesWheel($event)" (touchstart)="pauseFollowing()"
             (keydown)="onMessagesKeydown($event)" tabindex="0" aria-label="Conversation">
@@ -259,7 +221,7 @@ const DEFAULT_WIDTH = 400;
               <div class="intro">
                 <p class="intro-title">I fill in this wizard with you, one page at a time.</p>
                 <p class="intro-body">
-                  Try <code>/sdrf-annotate PXD000547</code>, upload a paper PDF, or ask about
+                  Try <code>/sdrf-annotate PXD000547</code>, upload a paper or supplementary table, or ask about
                   the SDRF specification. Every suggestion comes with the evidence behind it.
                 </p>
                 <div class="quick-starts">
@@ -272,6 +234,81 @@ const DEFAULT_WIDTH = 400;
                 </div>
               </div>
             }
+
+            <section class="quick auto-annotation" aria-label="Automatic annotation">
+              <button class="auto-entry" type="button"
+                [attr.aria-expanded]="autoPxdExpanded()" aria-controls="auto-pxd-form"
+                (click)="autoPxdExpanded.set(!autoPxdExpanded())">
+                <span class="quick-label">Auto annotate a PXD dataset</span>
+                <span class="quick-hint">Enter a PXD ID and confirm to start automatic annotation</span>
+              </button>
+              @if (autoPxdExpanded()) {
+                <form id="auto-pxd-form" class="auto-pxd-form" (ngSubmit)="confirmAutoPxd()">
+                  <label for="auto-pxd-id">PXD ID</label>
+                  <div class="auto-pxd-input-row">
+                    <input id="auto-pxd-id" name="autoPxdId" type="text"
+                      [(ngModel)]="autoPxdId" (ngModelChange)="autoPxdError = ''"
+                      placeholder="PXD000547" autocomplete="off" spellcheck="false"
+                      [disabled]="busy()" [attr.aria-invalid]="!!autoPxdError"
+                      [attr.aria-describedby]="autoPxdError ? 'auto-pxd-error' : null" />
+                    <button class="btn-secondary" type="submit"
+                      [disabled]="!canStartAuto(autoPxdId.trim()) || !autoPxdId.trim()">Confirm and start</button>
+                  </div>
+                  @if (autoPxdError) {
+                    <span id="auto-pxd-error" class="auto-pxd-error" role="alert">{{ autoPxdError }}</span>
+                  }
+                </form>
+              }
+              @if (autoAnnotation.status() !== 'idle') {
+              <button class="auto-summary" type="button"
+                [attr.aria-expanded]="autoDetailsExpanded()" aria-controls="auto-annotation-details"
+                (click)="autoDetailsExpanded.set(!autoDetailsExpanded())">
+                <span aria-hidden="true">{{ autoDetailsExpanded() ? '▾' : '▸' }}</span>
+                <span>Auto annotation · {{ autoAnnotation.status() }}</span>
+                @if (autoAnnotation.issues().length) {
+                  <span class="auto-issue-count">{{ autoAnnotation.issues().length }} unresolved</span>
+                }
+                <span class="auto-summary-action">{{ autoDetailsExpanded() ? 'Collapse' : 'Expand' }}</span>
+              </button>
+              <div class="auto-controls">
+                @if (autoAnnotation.active()) {
+                  <button class="btn-secondary" [disabled]="autoAnnotation.stopping()" (click)="autoAnnotation.stop()">Stop auto annotation</button>
+                } @else {
+                  <button class="btn-secondary" [disabled]="!canStartAuto()" (click)="startAutoAnnotation()">Resume auto annotation</button>
+                }
+                @if (autoAnnotation.canUndo()) {
+                  <button class="btn-secondary" [disabled]="busy()" (click)="undoAutoAnnotation()">Undo auto annotation</button>
+                }
+                @if (autoAnnotation.downloadable()) {
+                  <button class="btn-secondary" (click)="autoAnnotation.download()">{{ autoAnnotation.status() === 'complete' ? 'Download SDRF' : 'Download draft' }}</button>
+                }
+              </div>
+              <div id="auto-annotation-details" [hidden]="!autoDetailsExpanded()" class="auto-details">
+              @if (autoAnnotation.status() === 'idle') {
+                <p>Use the experiment in your message, attached paper or current conversation. Auto annotate continues from the current step, checking earlier requirements, and applies new suggestions without card approval.</p>
+              } @else {
+                <p role="status" aria-live="polite">{{ autoAnnotation.resultChanged() ? 'Wizard changed since automatic annotation completed. Run again to generate and validate the latest values.' : autoAnnotation.progress() }}</p>
+                @if (autoAnnotation.active()) { <p>Wizard editing is paused during this run. Stop to return to manual editing.</p> }
+                @if (autoAnnotation.status() === 'complete' && !autoAnnotation.resultChanged()) { <p>Template validation passed; ontology lookup was skipped, as in the existing review workflow.</p> }
+                @if (autoAnnotation.issues().length) {
+                  <details open><summary>Unresolved items ({{ autoAnnotation.issues().length }})</summary>
+                    <ul>@for (issue of autoAnnotation.issues(); track $index) { <li>{{ issue }}</li> }</ul>
+                  </details>
+                }
+                @if (autoAnnotation.warnings().length) {
+                  <details><summary>Validation warnings ({{ autoAnnotation.warnings().length }})</summary>
+                    <ul>@for (warning of autoAnnotation.warnings(); track $index) { <li>{{ warning }}</li> }</ul>
+                  </details>
+                }
+                @if (autoAnnotation.notes().length) {
+                  <details><summary>Annotation notes ({{ autoAnnotation.notes().length }})</summary>
+                    <ul>@for (note of autoAnnotation.notes(); track $index) { <li>{{ note }}</li> }</ul>
+                  </details>
+                }
+              }
+              </div>
+              }
+            </section>
 
             @for (message of messages(); track $index) {
               @if (message.role === 'user') {
@@ -302,7 +339,7 @@ const DEFAULT_WIDTH = 400;
                             font-weight="700"
                             font-family="system-ui,sans-serif"
                           >
-                            PDF
+                            DOC
                           </text>
                         </svg>
                         @if (message.attachment.status === 'ready') {
@@ -317,7 +354,7 @@ const DEFAULT_WIDTH = 400;
                           <span class="file-status">{{ message.attachment.error || 'Parsing failed' }}</span>
                         } @else {
                           <span class="file-status">
-                            {{ message.attachment.sizeLabel || 'PDF' }}
+                            {{ message.attachment.sizeLabel || 'Document' }}
                             @if (message.attachment.parser) {
                               · {{ message.attachment.parser }}
                             }
@@ -467,7 +504,7 @@ const DEFAULT_WIDTH = 400;
                           font-weight="700"
                           font-family="system-ui,sans-serif"
                         >
-                          PDF
+                          DOC
                         </text>
                       </svg>
                       <span class="composer-file-ok">✓</span>
@@ -481,7 +518,7 @@ const DEFAULT_WIDTH = 400;
                       <span class="composer-file-status">{{ file.error || 'Parsing failed' }}</span>
                     } @else {
                       <span class="composer-file-status">
-                        {{ file.sizeLabel || 'PDF' }}
+                        {{ file.sizeLabel || 'Document' }}
                         @if (file.parser) {
                           · {{ file.parser }}
                         }
@@ -517,10 +554,10 @@ const DEFAULT_WIDTH = 400;
                   (click)="fileInput.click()"
                   [title]="
                     api.health()?.mineruConfigured
-                      ? 'Attach PDF (parsed with MinerU)'
-                      : 'MinerU is not configured; paste the methods text instead'
+                      ? 'Attach paper or supplement (PDF, Excel, CSV, TSV, TXT, DOCX, ZIP)'
+                      : 'Attach Excel, CSV, TSV, TXT, DOCX or ZIP; PDF requires MinerU'
                   "
-                  aria-label="Attach PDF"
+                  aria-label="Attach paper or supplementary material"
                 >
                   <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
                     <path
@@ -560,7 +597,7 @@ const DEFAULT_WIDTH = 400;
             <input
               #fileInput
               type="file"
-              accept="application/pdf,.pdf"
+              accept=".pdf,.xlsx,.xls,.csv,.tsv,.txt,.docx,.zip"
               hidden
               (change)="onFileSelected($event)"
             />
@@ -570,7 +607,20 @@ const DEFAULT_WIDTH = 400;
     </aside>
   `,
   styles: [`
-    .auto-annotation { padding: 10px 14px; border-bottom: 1px solid #dbeafe; background: #f8fbff; font-size: 12px; max-height: 220px; overflow: auto; }
+    .auto-annotation { font-size: 12px; flex-shrink: 0; cursor: default; }
+    .intro + .auto-annotation { margin-top: -7px; }
+    .auto-entry { display: flex; flex-direction: column; gap: 2px; padding: 0; border: 0; background: transparent; text-align: left; font: inherit; line-height: 1.55; cursor: pointer; }
+    .auto-entry:focus-visible { outline: 2px solid #6366f1; outline-offset: 3px; border-radius: 3px; }
+    .auto-pxd-form { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+    .auto-pxd-input-row { display: flex; flex-wrap: wrap; gap: 6px; }
+    .auto-pxd-input-row input { flex: 1; min-width: 100px; width: 100px; padding: 6px 8px; border: 1px solid #d8dce5; border-radius: 6px; font: inherit; }
+    .auto-pxd-input-row input:focus-visible { outline: 2px solid #6366f1; outline-offset: 1px; }
+    .auto-pxd-error { color: #b91c1c; }
+    .auto-summary { display: flex; align-items: center; gap: 6px; width: 100%; padding: 0 0 8px; border: 0; background: transparent; color: #334155; font: inherit; text-align: left; cursor: pointer; }
+    .auto-summary:focus-visible { outline: 2px solid #6366f1; outline-offset: 2px; border-radius: 3px; }
+    .auto-summary-action { margin-left: auto; color: #4f46e5; }
+    .auto-issue-count { color: #92400e; }
+    .auto-details { max-height: min(180px, 25vh); overflow: auto; }
     .auto-controls { display: flex; flex-wrap: wrap; gap: 6px; }
     .auto-annotation p { margin: 6px 0 0; color: #475569; }
     .auto-annotation details { margin-top: 6px; }
@@ -1438,6 +1488,10 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
   private readonly bridge = inject(WizardAiBridgeService);
   readonly wizardState = inject(WizardStateService);
   readonly autoAnnotation = inject(WizardAutoAnnotationService);
+  readonly autoDetailsExpanded = signal(false);
+  readonly autoPxdExpanded = signal(false);
+  autoPxdId = '';
+  autoPxdError = '';
   private viewGeneration = 0;
   private requestSequence = 0;
 
@@ -1517,7 +1571,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
     },
     {
       label: 'Annotate my own paper',
-      hint: 'Upload a PDF — MinerU parses it, then I advise this page',
+      hint: 'Upload a paper or supplementary table, then I advise this page',
       prompt: '',
     },
   ];
@@ -1714,6 +1768,9 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
     if (this.autoAnnotation.active()) return;
     this.viewGeneration++;
     this.autoAnnotation.clear();
+    this.autoPxdExpanded.set(false);
+    this.autoPxdId = '';
+    this.autoPxdError = '';
     const session = this.history.select(id);
     if (!session) return;
     this.loadingSession = true;
@@ -1726,6 +1783,11 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
       this._composerFile.set(null);
       this.queuedStep = null;
       this.restoreWizard(session);
+      if (!this.wizardState.getState().projectAccession) {
+        const projectMessage = [...session.messages].reverse().find(message =>
+          message.role === 'user' && /\bPXD\d+\b/i.test(message.content));
+        this.wizardState.setProjectAccession(projectMessage?.content);
+      }
       this.followingLatest.set(true);
       this.scrollToBottom();
     } finally {
@@ -1874,21 +1936,37 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
 
   // -------------------------------------------------------------- step driving
 
-  canStartAuto(): boolean {
+  async confirmAutoPxd(): Promise<void> {
+    const accession = this.autoPxdId.trim().toUpperCase();
+    if (!/^PXD\d{6,}$/.test(accession)) {
+      this.autoPxdError = 'Enter a valid PXD ID, for example PXD000547.';
+      return;
+    }
+    const request = `/sdrf-annotate ${accession}`;
+    if (!this.canStartAuto(request)) return;
+    this.autoPxdId = accession;
+    this.autoPxdError = '';
+    this.autoPxdExpanded.set(false);
+    this.autoDetailsExpanded.set(true);
+    await this.startAutoAnnotation(request);
+  }
+
+  canStartAuto(initial = this.draft.trim()): boolean {
     return !this.busy() && !this.applyingCard && this.composerFile()?.status !== 'parsing'
-      && (!!this.draft.trim() || this.composerFile()?.status === 'ready'
+      && (!!initial || this.composerFile()?.status === 'ready'
         || this.messages().some(message => message.role === 'user')
         || !!this.wizardState.getState().experimentDescription.trim() || !!this.accession());
   }
 
-  async startAutoAnnotation(): Promise<void> {
-    if (!this.canStartAuto()) return;
-    const initial = this.draft.trim();
+  async startAutoAnnotation(initial = this.draft.trim()): Promise<void> {
+    if (!this.canStartAuto(initial)) return;
     const attachment = this.composerFile()?.status === 'ready' ? this.composerFile()! : undefined;
     const slash = parseSlashCommand(initial);
     const previousSkill = !initial ? [...this.messages()].reverse().find(message => message.skill)?.skill : undefined;
     const sourceContext = initial || previousSkill?.args || '';
-    const accession = slash?.accession || sourceContext.match(/\bPXD\d+\b/i)?.[0]?.toUpperCase() || this.accession();
+    const accession = slash?.accession || sourceContext.match(/\bPXD\d+\b/i)?.[0]?.toUpperCase()
+      || this.wizardState.getState().projectAccession || this.accession();
+    this.wizardState.setProjectAccession(accession);
     const skill = slash ? { name: slash.name, args: slash.args || undefined }
       : previousSkill || (accession ? { name: 'sdrf-annotate', args: accession } : undefined);
     const generation = this.viewGeneration;
@@ -1900,18 +1978,17 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
     this.markAdvised(5);
     await this.autoAnnotation.start({
       abort: () => this.api.abort(),
-      request: async (step, feedback, runId) => {
+      request: async (step, runId) => {
         if (generation !== this.viewGeneration) throw new Error('Conversation changed.');
         const file = first ? attachment : undefined;
         first = false;
         const prompt = [initial ? `Annotation request: ${initial}` : '',
           attachment ? `Use uploaded documentId ${attachment.documentId} (${attachment.fileName}).` : '',
           `Automatically complete step ${step + 1}: ${WIZARD_STEPS[step].title}. Use current evidence and preserve correct existing values. Return actions and an automation completion report.`,
-          feedback.length ? `Previous execution/validation issues:\n${feedback.join('\n')}\nUse the CURRENT snapshot to repair these issues. Failed action batches were rolled back.` : '',
         ].filter(Boolean).join('\n\n');
         const result = await this.send(prompt, {
           focusStep: WIZARD_STEPS[step].id as AssistantStepId, mode: 'step', auto: true,
-          autoLabel: `${feedback.length ? 'Auto repair' : 'Auto annotation'} · Step ${step + 1}: ${WIZARD_STEPS[step].title}`,
+          autoLabel: `Auto annotation · Step ${step + 1}: ${WIZARD_STEPS[step].title}`,
           attachment: file, skill, accession, automationRunId: runId,
         });
         if (!result) throw new Error('Could not start automatic assistant turn.');
@@ -2048,7 +2125,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
 
     const raw = (text ?? this.draft).trim();
     const uploadPrompt = attachment
-      ? `I uploaded the paper "${attachment.fileName}" (documentId ${attachment.documentId}). ` +
+      ? `I uploaded the document "${attachment.fileName}" (documentId ${attachment.documentId}). ` +
         `Please call read_document on that documentId with sections ["methods","results"], then ` +
         `propose wizard actions for the page I am on.`
       : '';
@@ -2059,6 +2136,11 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
       (attachment ? [uploadPrompt, raw].filter(Boolean).join('\n\n') : '') ||
       raw;
     if (!content && !attachment) return;
+    if (!options.automationRunId) {
+      this.wizardState.setProjectAccession(options.accession ?? slash?.accession
+        ?? raw.match(/\bPXD\d+\b/i)?.[0]
+        ?? this.wizardState.getState().projectAccession ?? this.accession());
+    }
 
     const stepIndex = options.focusStep
       ? WIZARD_STEPS.findIndex(config => config.id === options.focusStep)
@@ -2105,7 +2187,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
         sessionId: this.sessionId,
         messages: chatHistory,
         wizardState: this.bridge.buildSnapshot(!!options.automationRunId),
-        accession: options.accession ?? slash?.accession ?? this.accession(),
+        accession: options.accession ?? slash?.accession ?? this.wizardState.getState().projectAccession ?? this.accession(),
         focusStep,
         mode: options.mode || 'chat',
         ...(options.automationRunId ? { executionMode: 'auto' as const } : {}),
@@ -2299,6 +2381,9 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
     try {
       await this.bridge.applyAction(card.action);
       this.updateCard(card.id, { status: 'applied', preview, error: undefined });
+      this.autoAnnotation.recordManualApplication(card.action.step,
+        !Object.values(this._cards()).some(other => other.action.step === card.action.step
+          && (other.status === 'pending' || other.status === 'failed')));
     } catch (error) {
       const message =
         error instanceof WizardActionError || error instanceof Error
@@ -2363,7 +2448,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
     this._composerFile.set({
       fileName: file.name,
       documentId: '',
-      parser: 'MinerU',
+      parser: file.name.toLowerCase().endsWith('.pdf') ? 'MinerU' : 'Supplement parser',
       sections: [],
       charCount: 0,
       sizeLabel,
@@ -2386,7 +2471,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
       this._composerFile.set({
         fileName: file.name,
         documentId: '',
-        parser: 'MinerU',
+        parser: file.name.toLowerCase().endsWith('.pdf') ? 'MinerU' : 'Supplement parser',
         sections: [],
         charCount: 0,
         sizeLabel,

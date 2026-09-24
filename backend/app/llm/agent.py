@@ -126,6 +126,8 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
     settings = get_settings()
     client = LlmClient(settings)
     store = get_session_store()
+    from ..tools.templates import active_snapshot
+    active_snapshot.set(request.wizardState.templateSnapshotId if request.wizardState else None)
     focus_step = resolve_focus_step(request)
     skill = _resolve_skill(request)
 
@@ -768,7 +770,7 @@ def _evidence_note(name: str, result: Any) -> tuple[str, str] | None:
             f"Open full text: {'yes' if result.get('fullTextAvailable') else 'no'}.",
         )
 
-    if name in ("read_document", "parse_pdf_url", "get_publication_full_text"):
+    if name in ("read_document", "parse_pdf_url", "get_publication_full_text", "get_publication_supplement", "get_publication_abstract"):
         if result.get("ok") is False:
             return None
         document_id = result.get("documentId") or result.get("fileName") or "document"
@@ -838,12 +840,15 @@ def _citations_from_tool(name: str, result: Any) -> list[Citation]:
         ]
 
     if name == "find_publication" and result.get("found"):
+        # Discovery now returns an abstract document descriptor, not its text.
+        abstract = result.get("abstract")
+        snippet = abstract[:320] if isinstance(abstract, str) else ""
         return [
             Citation(
                 source="paper",
                 title=result.get("title") or "Publication",
                 url=result.get("url"),
-                snippet=(result.get("abstract") or "")[:320],
+                snippet=snippet,
             )
         ]
 

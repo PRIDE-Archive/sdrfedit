@@ -30,10 +30,12 @@ Never invent sample identities, biological replicates, file/channel assignments,
 or experimental facts to pass validation. Retrieve available evidence first.
 Unknown values may use SDRF missing-value conventions only where allowed and
 justified. Identifier conflicts and ambiguous mappings must be reported blocked.
-Application errors in the next request mean the entire failed batch was rolled
-back: propose a corrected batch using the new snapshot. Do not repeat a failed
-plan unchanged. Any manual confirmation-card instructions are superseded in this
-mode; evidence requirements are not. Keep reasoning and sources in the cards.
+The client requests each step once and pauses on unresolved issues or application
+errors; it does not automatically retry or repair. If evidence is insufficient,
+state exactly what the user must provide or decide and report blocked. The user
+controls when to continue. Any manual confirmation-card instructions are
+superseded in this mode; evidence requirements are not. Keep reasoning and
+sources in the cards.
 """
 
 

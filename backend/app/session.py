@@ -33,6 +33,33 @@ class StoredDocument:
     document: ParsedDocument
     metadata: dict = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
+    read_ranges: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
+
+    def evidence_sections(self) -> dict[str, str]:
+        if self.metadata.get("evidenceKind") == "abstract":
+            return {}
+        if self.metadata.get("evidenceKind") == "supplement":
+            return {name: text for name, text in (self.document.sections or {"body": self.document.markdown}).items() if text.strip()}
+        return self.document.evidence_sections()
+
+    def reading_status(self) -> dict:
+        sections = self.document.sections or {"body": self.document.markdown}
+        return {name: {"totalChars": len(text), "readRanges": self.read_ranges.get(name, []),
+                       "readChars": sum(end - start for start, end in self.read_ranges.get(name, []))}
+                for name, text in sections.items()}
+
+    def unread_sections(self) -> dict[str, int]:
+        sections = self.document.sections or {"body": self.document.markdown}
+        pending = {}
+        for name in sections:
+            end = 0
+            for start, stop in sorted(self.read_ranges.get(name, [])):
+                if start > end:
+                    break
+                end = max(end, stop)
+            if end < len(sections[name]):
+                pending[name] = end
+        return pending
 
 
 @dataclass
@@ -47,14 +74,23 @@ class EvidenceNote:
 class SessionStore:
     def __init__(self) -> None:
         self._documents: dict[str, StoredDocument] = {}
+        self._setup_context: dict[tuple[str, str | None], tuple[float, dict]] = {}
         self._evidence: dict[str, dict[str, EvidenceNote]] = {}
-        self._pdf_sources: dict[str, dict[str, tuple[str, float]]] = {}
+        self._pdf_sources: dict[str, dict[str, tuple[str, float, dict]]] = {}
 
-    def remember_pdf_source(self, session_id: str, url: str, source: str) -> None:
+    def setup_context(self, session_id: str, accession: str | None) -> dict:
+        self._evict()
+        return dict(self._setup_context.get((session_id, accession), (0, {}))[1])
+
+    def save_setup_context(self, session_id: str, accession: str | None, context: dict) -> None:
+        self._evict()
+        self._setup_context[(session_id, accession)] = (time.time(), dict(context))
+
+    def remember_pdf_source(self, session_id: str, url: str, source: str, identifiers: dict | None = None) -> None:
         """Keep discovery provenance so downloads need no model-supplied proxy flags."""
         self._evict()
         sources = self._pdf_sources.setdefault(session_id, {})
-        sources[url] = (source, time.time())
+        sources[url] = (source, time.time(), dict(identifiers or {}))
         while len(sources) > 64:
             del sources[min(sources, key=lambda key: sources[key][1])]
 
@@ -62,6 +98,29 @@ class SessionStore:
         self._evict()
         entry = self._pdf_sources.get(session_id, {}).get(url)
         return entry[0] if entry else None
+
+    def pdf_identifiers(self, session_id: str, url: str) -> dict:
+        self._evict()
+        entry = self._pdf_sources.get(session_id, {}).get(url)
+        return dict(entry[2]) if entry else {}
+
+    def record_document_read(self, session_id: str, document_id: str, info: dict) -> None:
+        doc = self.get(document_id)
+        if not doc or doc.session_id != session_id:
+            return
+        sections = doc.document.sections or {"body": doc.document.markdown}
+        for name, page in info.items():
+            start, count = page.get("offset"), page.get("returnedChars")
+            if (name not in sections or type(start) is not int or type(count) is not int
+                    or start < 0 or count <= 0 or start + count > len(sections[name])):
+                continue
+            merged = []
+            for left, right in sorted([*doc.read_ranges.get(name, []), (start, start + count)]):
+                if merged and left <= merged[-1][1]:
+                    merged[-1] = (merged[-1][0], max(merged[-1][1], right))
+                else:
+                    merged.append((left, right))
+            doc.read_ranges[name] = merged
 
     def add_document(
         self, session_id: str, file_name: str, document: ParsedDocument, origin: str = "upload", metadata: dict | None = None
@@ -108,6 +167,9 @@ class SessionStore:
     def _evict(self) -> None:
         ttl = get_settings().session_ttl_seconds
         cutoff = time.time() - ttl
+        for key, (created_at, _) in list(self._setup_context.items()):
+            if created_at < cutoff:
+                del self._setup_context[key]
         stale = [key for key, value in self._documents.items() if value.created_at < cutoff]
         for key in stale:
             del self._documents[key]
@@ -119,7 +181,7 @@ class SessionStore:
                 del self._evidence[session_id]
 
         for session_id, sources in list(self._pdf_sources.items()):
-            for url in [url for url, (_, created_at) in sources.items() if created_at < cutoff]:
+            for url in [url for url, (_, created_at, _) in sources.items() if created_at < cutoff]:
                 del sources[url]
             if not sources:
                 del self._pdf_sources[session_id]

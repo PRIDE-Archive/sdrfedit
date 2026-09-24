@@ -48,6 +48,8 @@ class Settings(BaseSettings):
     mineru_timeout_seconds: float = 300.0
     mineru_poll_interval_seconds: float = 5.0
 
+    template_github_token: str = ""
+
     spec_url: str = "https://sdrf.quantms.org/specification.html"
     spec_index_dir: str = "data/spec_index"
     spec_source_file: str = "data/spec/specification.md"

@@ -1,214 +1,77 @@
-"""SDRF template manifest and column definitions from bigbio/sdrf-templates.
+"""Assistant adapters over the same commit-pinned catalogue as the wizard."""
+from contextvars import ContextVar
+from ..template_catalog import get_catalog, CatalogError
+from .http import ToolHttpError
 
-The wizard picks templates as three layers (technology + sample + experiment
-extras), so the assistant needs the same manifest the frontend reads to make a
-recommendation that the wizard will accept.
-"""
-
-from __future__ import annotations
-
-import time
-
-import yaml
-
-from .http import ToolHttpError, get_text
-
-GITHUB_RAW_BASE = "https://raw.githubusercontent.com/bigbio/sdrf-templates/main"
-CACHE_TTL_SECONDS = 3600
-
-_manifest_cache: tuple[float, dict] | None = None
-_template_cache: dict[str, tuple[float, dict]] = {}
-
-
-async def _load_manifest() -> dict:
-    global _manifest_cache
-    now = time.time()
-    if _manifest_cache and now - _manifest_cache[0] < CACHE_TTL_SECONDS:
-        return _manifest_cache[1]
-
-    text = await get_text(f"{GITHUB_RAW_BASE}/templates.yaml")
-    manifest = yaml.safe_load(text) or {}
-    _manifest_cache = (now, manifest)
-    return manifest
-
-
-async def _load_template(name: str, version: str) -> dict:
-    key = f"{name}@{version}"
-    now = time.time()
-    cached = _template_cache.get(key)
-    if cached and now - cached[0] < CACHE_TTL_SECONDS:
-        return cached[1]
-
-    text = await get_text(f"{GITHUB_RAW_BASE}/{name}/{version}/{name}.yaml")
-    template = yaml.safe_load(text) or {}
-    _template_cache[key] = (now, template)
-    return template
-
-
-async def list_templates(layer: str | None = None) -> dict:
-    """List available templates grouped by layer (technology / sample / experiment)."""
-    manifest = await _load_manifest()
-    entries = manifest.get("templates", {})
-
-    grouped: dict[str, list[dict]] = {}
-    for name, meta in entries.items():
-        template_layer = meta.get("layer") or "internal"
-        if layer and template_layer != layer:
-            continue
-        grouped.setdefault(template_layer, []).append(
-            {
-                "name": name,
-                "latest": meta.get("latest"),
-                "usableAlone": bool(meta.get("usable_alone")),
-                "extends": meta.get("extends"),
-                "description": (meta.get("description") or "").strip(),
-            }
-        )
-
-    for items in grouped.values():
-        items.sort(key=lambda item: item["name"])
-
-    return {
-        "layers": grouped,
-        "selectionRules": [
-            "Pick exactly one technology template (e.g. ms-proteomics, affinity-proteomics).",
-            "Pick zero or one sample template from the catalogue; omit it when no specialized sample template applies.",
-            "Add zero or more experiment templates (cell-lines, dia-acquisition, single-cell, ...).",
-            "Templates listed under internal (base, sample-metadata) are inherited, never selected.",
-        ],
-    }
-
-
-def _parse_extends(value: str | None) -> str | None:
-    if not value:
-        return None
-    return value.split("@", 1)[0].strip() or None
-
+active_snapshot: ContextVar[str | None] = ContextVar('template_snapshot', default=None)
 
 def _ontologies_from_validators(column: dict) -> list[str]:
-    """Extract ontology prefixes from a template column's validators block."""
-    found: list[str] = []
-    for validator in column.get("validators") or []:
-        if not isinstance(validator, dict):
-            continue
-        name = (validator.get("validator_name") or validator.get("validatorName") or "").lower()
-        if name != "ontology":
-            continue
-        params = validator.get("params") or {}
-        for prefix in params.get("ontologies") or []:
-            text = str(prefix).strip().lower()
-            if text and text not in found:
-                found.append(text)
-    return found
+    return list(dict.fromkeys(ontology for validator in column.get('validators', [])
+        if validator.get('validator_name') == 'ontology'
+        for ontology in validator.get('params', {}).get('ontologies', [])))
 
+async def _snapshot():
+    try:
+        return await get_catalog().get(active_snapshot.get())
+    except (CatalogError, ValueError) as exc:
+        raise ToolHttpError(str(exc)) from exc
+
+async def _load_manifest() -> dict:
+    # Kept for setup-gate catalogue membership checks.
+    return (await _snapshot()).payload['manifest']
+
+async def list_templates(layer: str | None = None) -> dict:
+    snapshot = await _snapshot()
+    grouped = {}
+    for template in snapshot.public()['templates']:
+        group = template.get('layer') or 'internal'
+        if layer and layer != group: continue
+        grouped.setdefault(group, []).append({
+            'name': template['name'], 'latest': template['version'],
+            'description': template.get('description', ''), 'usableAlone': template.get('usable_alone', True),
+            'extends': template.get('extends'), 'requires': template.get('requires', []),
+            'mutuallyExclusiveWith': template.get('mutually_exclusive_with', []),
+            'excludes': template.get('excludes', {}), 'unsupported': template.get('_unsupported', []),
+        })
+    return {'snapshotId': snapshot.snapshot_id, 'layers': grouped,
+            'selectionRules': [
+                'Choose a technology; select any compatible sample and experiment templates.',
+                'Resolve inherited requirements and mutual exclusions using validate_template_combination.',
+                'Sample-layer templates may be combined unless their definitions prohibit it.',
+                'Internal templates are inherited; do not select them directly.',
+            ]}
 
 async def get_template_columns(name: str, version: str | None = None, include_inherited: bool = True) -> dict:
-    """Resolve a template and its inheritance chain into a flat column list."""
-    manifest = await _load_manifest()
-    entries = manifest.get("templates", {})
-    if name not in entries:
-        available = ", ".join(sorted(entries))
-        raise ToolHttpError(f"Unknown template '{name}'. Available: {available}")
+    snapshot = await _snapshot()
+    if name not in snapshot.manifest: raise ToolHttpError(f'Unknown template: {name}')
+    version = version or snapshot.manifest[name]['latest']
+    result = snapshot.resolve([{'name': name, 'version': version}], preview=True, availability=False)
+    if not result['valid']: raise ToolHttpError(' '.join(result['errors']))
+    doc = snapshot.doc(name, version)
+    raw_columns = result['columns'] if include_inherited else doc['columns']
+    columns = [{**col,
+        'ontologies': _ontologies_from_validators(col),
+        'allowNotAvailable': col.get('allow_not_available', False),
+        'allowNotApplicable': col.get('allow_not_applicable', False),
+    } for col in raw_columns]
+    return {'snapshotId': snapshot.snapshot_id, 'name': name, 'version': version, 'layer': doc.get('layer'),
+            'description': doc.get('description', ''), 'documentation': doc.get('documentation', ''),
+            'mutuallyExclusiveWith': doc.get('mutually_exclusive_with', []),
+            'inheritanceChain': [ref['name'] for ref in result['resolvedTemplates']],
+            'columns': columns,
+            'requiredColumns': [c['name'] for c in columns if c.get('requirement') == 'required'],
+            'recommendedColumns': [c['name'] for c in columns if c.get('requirement') == 'recommended']}
 
-    chain: list[dict] = []
-    current: str | None = name
-    current_version = version or entries[name].get("latest")
-    seen: set[str] = set()
-
-    while current and current not in seen:
-        seen.add(current)
-        resolved_version = current_version or entries.get(current, {}).get("latest")
-        if not resolved_version:
-            break
-        template = await _load_template(current, resolved_version)
-        chain.append(template)
-        if not include_inherited:
-            break
-        current = _parse_extends(template.get("extends"))
-        current_version = None
-
-    columns: dict[str, dict] = {}
-    for template in reversed(chain):  # base first so child overrides win
-        for column in template.get("columns") or []:
-            if not isinstance(column, dict) or not column.get("name"):
-                continue
-            columns[column["name"]] = {
-                "name": column["name"],
-                "requirement": column.get("requirement", "optional"),
-                "ontologyAccession": column.get("ontology_accession"),
-                "ontologies": _ontologies_from_validators(column),
-                "description": (column.get("description") or "").strip(),
-                "allowNotAvailable": bool(column.get("allow_not_available")),
-                "allowNotApplicable": bool(column.get("allow_not_applicable")),
-                "fromTemplate": template.get("name"),
-            }
-
-    head = chain[0] if chain else {}
-    ordered = list(columns.values())
-    return {
-        "name": name,
-        "version": head.get("version"),
-        "layer": head.get("layer"),
-        "description": (head.get("description") or "").strip(),
-        "documentation": (head.get("documentation") or "").strip()[:4000],
-        "mutuallyExclusiveWith": head.get("mutually_exclusive_with") or [],
-        "inheritanceChain": [t.get("name") for t in chain],
-        "requiredColumns": [c["name"] for c in ordered if c["requirement"] == "required"],
-        "recommendedColumns": [c["name"] for c in ordered if c["requirement"] == "recommended"],
-        "columns": ordered,
-    }
-
-
-async def validate_combination(
-    technology: str | None, sample: str | None, experiments: list[str] | None = None
-) -> dict:
-    """Check a template combination against layers and exclusivity rules."""
-    manifest = await _load_manifest()
-    entries = manifest.get("templates", {})
-    experiments = experiments or []
-    errors: list[str] = []
-    warnings: list[str] = []
-
-    def layer_of(name: str) -> str | None:
-        return entries.get(name, {}).get("layer")
-
-    for name in [n for n in [technology, sample, *experiments] if n]:
-        if name not in entries:
-            errors.append(f"Unknown template '{name}'.")
-
-    if not technology:
-        errors.append("A technology template is required (e.g. ms-proteomics).")
-    elif layer_of(technology) != "technology":
-        errors.append(f"'{technology}' is a {layer_of(technology) or 'unknown'} template, not technology.")
-
-    if sample and layer_of(sample) not in ("sample", None):
-        errors.append(f"'{sample}' is a {layer_of(sample)} template, not sample.")
-
-    if technology in entries and not sample and not experiments:
-        if not entries[technology].get("usable_alone"):
-            errors.append(f"'{technology}' cannot be used alone; select a sample template.")
-
-    selected = [n for n in [technology, sample, *experiments] if n and n in entries]
-    for name in selected:
-        meta = entries[name]
-        version = meta.get("latest")
-        if not version:
-            continue
-        try:
-            template = await _load_template(name, version)
-        except ToolHttpError:
-            continue
-        for exclusive in template.get("mutually_exclusive_with") or []:
-            if exclusive in selected:
-                errors.append(f"'{name}' cannot be combined with '{exclusive}'.")
-
-    for name in experiments:
-        if name in entries and layer_of(name) not in ("experiment", "sample"):
-            warnings.append(f"'{name}' has layer '{layer_of(name)}' - unusual as an experiment extra.")
-
-    return {
-        "valid": not errors,
-        "errors": sorted(set(errors)),
-        "warnings": sorted(set(warnings)),
-        "selected": {"technology": technology, "sample": sample, "experiments": experiments},
-    }
+async def validate_combination(technology: str | None, sample: str | None,
+                               experiments: list[str] | None = None, sample_metadata: list[str] | None = None) -> dict:
+    snapshot = await _snapshot()
+    names = list(dict.fromkeys(n for n in [technology, sample, *(sample_metadata or []), *(experiments or [])] if n))
+    result = snapshot.resolve([{'name': name} for name in names], availability=False)
+    # Legacy action argument roles are validated as well as the general selection.
+    for name, layer in [(technology, 'technology'), (sample, 'sample')]:
+        if name in snapshot.manifest:
+            doc = snapshot.doc(name, snapshot.manifest[name]['latest'])
+            if doc.get('layer') != layer:
+                result['errors'].append(f'{name} is not a {layer} template.')
+    result['valid'] = not result['errors']
+    return {key: result[key] for key in ('snapshotId', 'valid', 'errors', 'warnings', 'issues', 'leafTemplates')}

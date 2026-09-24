@@ -9,12 +9,12 @@ import { autoAnnotationStartStep, runAutoAnnotation, waitForAutoTask, type AutoT
 import { WizardStateService } from '../wizard-state.service';
 import { WizardGeneratorService } from '../wizard-generator.service';
 import { SdrfExportService } from '../sdrf-export.service';
-import { PyodideValidatorService } from '../pyodide-validator.service';
+import { TemplateService } from '../template.service';
 import { WizardAiBridgeService } from './wizard-ai-bridge.service';
 
 interface Checkpoint { state: WizardState; step: number }
 export interface AutoAnnotationCallbacks {
-  request(step: number, feedback: string[], runId: string): Promise<AutoTurn>;
+  request(step: number, runId: string): Promise<AutoTurn>;
   record(cards: WizardActionCard[], applied: boolean, error?: string): void;
   abort(): void;
 }
@@ -25,7 +25,7 @@ export class WizardAutoAnnotationService {
   private readonly wizard = inject(WizardStateService);
   private readonly bridge = inject(WizardAiBridgeService);
   private readonly generator = inject(WizardGeneratorService);
-  private readonly validator = inject(PyodideValidatorService);
+  private readonly templates = inject(TemplateService);
   private readonly exporter = new SdrfExportService();
   readonly active = signal(false);
   readonly stopping = signal(false);
@@ -42,6 +42,7 @@ export class WizardAutoAnnotationService {
     && this.result()!.fingerprint === this.stateFingerprint());
   readonly resultChanged = computed(() => this.status() === 'complete' && !!this.result()
     && this.result()!.fingerprint !== this.stateFingerprint());
+  private resumePoint: { step: number; appliedFingerprint?: string } | null = null;
   private controller: AbortController | null = null;
   private abortRequest: (() => void) | null = null;
 
@@ -60,7 +61,11 @@ export class WizardAutoAnnotationService {
   async start(callbacks: AutoAnnotationCallbacks): Promise<void> {
     if (this.active()) return;
     const checkpoint = this.checkpoint();
-    const startStep = autoAnnotationStartStep(checkpoint.step, step => this.stepErrors(step));
+    const resume = this.resumePoint;
+    const startStep = autoAnnotationStartStep(checkpoint.step, step => this.stepErrors(step), resume ? {
+      step: resume.step,
+      manuallyCompleted: resume.appliedFingerprint === this.stateFingerprint(),
+    } : undefined);
     const runId = globalThis.crypto?.randomUUID?.() || `auto_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const controller = new AbortController();
     this.controller = controller;
@@ -78,6 +83,7 @@ export class WizardAutoAnnotationService {
       restore: point => this.wizard.hydrate(point.state, point.step),
       fingerprint: () => this.fingerprint(),
       navigate: step => {
+        this.resumePoint = { step };
         // Preserve the normal next-step initialization (samples, factors, runs).
         if (step === this.wizard.currentStep() + 1) this.wizard.nextStep();
         else this.wizard.goToStep(step);
@@ -85,7 +91,7 @@ export class WizardAutoAnnotationService {
           throw new Error(`Cannot enter step ${step + 1}: the preceding wizard step is incomplete.`);
         }
       },
-      request: (step, feedback) => callbacks.request(step, feedback, runId),
+      request: step => callbacks.request(step, runId),
       apply: card => {
         this.result.set(null);
         if (card.action.step !== WIZARD_STEPS[this.wizard.currentStep()].id) {
@@ -101,19 +107,28 @@ export class WizardAutoAnnotationService {
       validate: () => this.validate(controller.signal),
       progress: text => this.progress.set(text),
     }, controller.signal, startStep);
+    if (outcome.status === 'complete') this.resumePoint = null;
     this.status.set(outcome.status);
     this.issues.set(outcome.issues);
     const location = `step ${this.wizard.currentStep() + 1}: ${WIZARD_STEPS[this.wizard.currentStep()].title}`;
     this.progress.set(outcome.status === 'complete' ? 'SDRF generated and template validation passed.'
       : outcome.status === 'waiting' ? `Waiting for your reply at ${location}. No recommendation cards were generated. Completed steps are kept. Answer the assistant in chat, or choose Auto annotate to continue.`
       : outcome.status === 'stopped' ? `Stopped at ${location}. Completed steps are kept.`
-      : `Draft saved at ${location}. Automatic annotation could not finish.`);
+      : `Draft saved at ${location}. Resolve the listed issues, then choose Auto annotate to continue.`);
     if (outcome.status === 'stopped') this.result.set(null);
     this.undoPoint.set({ checkpoint, fingerprint: this.stateFingerprint(), runId });
     this.controller = null;
     this.abortRequest = null;
     this.active.set(false);
     this.stopping.set(false);
+  }
+
+  /** Only a successful, fully applied manual card set can complete a paused step. */
+  recordManualApplication(stepId: string, allApplied: boolean): void {
+    const point = this.resumePoint;
+    if (this.active() || !point || WIZARD_STEPS[point.step]?.id !== stepId) return;
+    point.appliedFingerprint = allApplied && !this.stepErrors(point.step).length
+      ? this.stateFingerprint() : undefined;
   }
 
   stop(): void {
@@ -127,6 +142,7 @@ export class WizardAutoAnnotationService {
   /** Clear only transient UI when a different chat is loaded. */
   clear(): void {
     if (this.active()) return;
+    this.resumePoint = null;
     this.status.set('idle');
     this.result.set(null);
     this.undoPoint.set(null);
@@ -148,7 +164,10 @@ export class WizardAutoAnnotationService {
     const url = URL.createObjectURL(new Blob([this.result()!.tsv], { type: 'text/tab-separated-values;charset=utf-8' }));
     const link = document.createElement('a');
     link.href = url;
-    link.download = this.status() === 'complete' ? 'auto-annotated.sdrf.tsv' : 'auto-annotation-draft.sdrf.tsv';
+    const accession = this.wizard.getState().projectAccession?.match(/^PXD\d+$/i)?.[0]?.toUpperCase();
+    link.download = this.status() === 'complete'
+      ? (accession ? `${accession}.sdrf.tsv` : 'auto-annotated.sdrf.tsv')
+      : (accession ? `${accession}.draft.sdrf.tsv` : 'auto-annotation-draft.sdrf.tsv');
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
@@ -162,8 +181,8 @@ export class WizardAutoAnnotationService {
     if (step === 1) {
       const required = state.characteristicColumns.filter(c => c.requirement === 'required'
         && !isWizardSkippedCharacteristic(c.name) && getSpecialtyCharacteristicKey(c.name) !== 'material type');
-      const names = required.length ? required.map(c => c.name)
-        : ['characteristics[organism]', 'characteristics[disease]', 'characteristics[organism part]'];
+      const names = required.map(c => c.name);
+      if (!state.effectiveColumns?.length) errors.push('Load the selected template columns before continuing.');
       for (const name of names) {
         if (!state.characteristicChoices[name]?.length) errors.push(`Add an evidence-supported value for ${name}.`);
       }
@@ -201,47 +220,36 @@ export class WizardAutoAnnotationService {
       errors.push('Check unique file names, valid fraction/technical replicate numbers, label kits and evidence-supported run/channel/sample mappings.');
     }
     if (step === 4 && !this.wizard.isStep5Valid()) {
-      if (!state.instrument) errors.push('Provide a verified instrument ontology term.');
-      if (!state.cleavageAgent) errors.push('Provide a verified cleavage agent.');
-      errors.push('Mass tolerances must use supported units or permitted missing values.');
+      errors.push('Complete required fields from the resolved template columns and correct invalid protocol values.');
     }
     return errors;
   }
 
   private async validate(signal: AbortSignal): Promise<AutoValidation> {
+    // An explicit restart after a validation failure should revalidate, not replay protocol cards.
+    this.resumePoint = { step: 5 };
     // Regeneration can fail; never retain an earlier, now stale artifact.
     this.result.set(null);
     for (let step = 0; step < 5; step++) {
       const issues = this.stepErrors(step);
-      if (issues.length) return { issues, repairStep: step };
+      if (issues.length) return { issues };
     }
     const state = this.wizard.getState();
     const table = this.generator.generate(state);
     const tsv = this.exporter.exportToTsv(table);
     this.result.set({ tsv, fingerprint: this.stateFingerprint() });
-    const templates = [...new Set([getSampleTemplateId(state), state.technologyTemplate, ...state.experimentTemplates]
-      .filter((name): name is string => !!name))];
     try {
-      const issues = await waitForAutoTask(this.validator.validate(tsv, templates.length ? templates : ['ms-proteomics'], {
-        skipOntology: true, mode: 'api', allowApiFallback: false,
-      }), AbortSignal.any([signal, AbortSignal.timeout(60_000)]));
+      if (!state.templateSnapshotId) throw new Error('Missing template snapshot. Return to template selection.');
+      const issues = await waitForAutoTask(this.templates.validateTable(state.templateSnapshotId, state.selectedTemplates || [], tsv),
+        AbortSignal.any([signal, AbortSignal.timeout(60_000)]));
       if (signal.aborted) return { issues: ['Stopped'] };
       this.warnings.set(issues.filter(issue => issue.level === 'warning').map(issue => issue.message));
       const errors = issues.filter(issue => issue.level === 'error');
       return {
         issues: errors.map(issue => `${issue.column || 'SDRF'}${issue.row >= 0 ? ` row ${issue.row + 1}` : ''}: ${issue.message}`),
-        repairStep: errors.length ? Math.min(...errors.map(issue => repairStepForColumn(issue.column))) : undefined,
       };
     } catch (error) {
       return { issues: [`Final validation unavailable: ${error instanceof Error ? error.message : String(error)}. The generated file is an unvalidated draft.`] };
     }
   }
-}
-
-function repairStepForColumn(column: string | null): number {
-  const name = (column || '').toLowerCase();
-  if (name.startsWith('characteristics[') || name.startsWith('factor value[')) return 1;
-  if (name === 'source name' || name.includes('biological replicate')) return 2;
-  if (['instrument', 'cleavage', 'modification', 'tolerance'].some(part => name.includes(part))) return 4;
-  return 3;
 }

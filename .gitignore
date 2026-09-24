@@ -251,3 +251,6 @@ sdrf-agent-trace-*.json
 
 # Downloaded public article cache
 backend/data/publications/
+
+# Complete, commit-pinned official template snapshots
+backend/data/template_catalog/

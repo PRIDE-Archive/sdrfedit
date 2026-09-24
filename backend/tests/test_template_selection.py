@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.tools import templates
+from app.template_catalog import CatalogSnapshot
 from app.llm.setup_gate import SetupGate
 from app.session import SessionStore
 from app.llm.agent import _parse_actions
@@ -24,6 +25,10 @@ def catalogue(monkeypatch):
            ["human", "metaproteomics", "human-gut", "soil", "water"]},
     }
     monkeypatch.setattr(templates, "_load_manifest", AsyncMock(return_value={"templates": entries}))
+    definitions = {f'{name}@1.0.0': dict(name=name, version='1.0.0', columns=[], **entry) for name, entry in entries.items()}
+    manifest = {'templates': {name: dict(latest='1.0.0', versions=['1.0.0'], **entry) for name, entry in entries.items()}}
+    snap = CatalogSnapshot(dict(snapshotId='a' * 40 + ':1', commitSha='a' * 40, manifest=manifest, definitions=definitions))
+    monkeypatch.setattr(templates, '_snapshot', AsyncMock(return_value=snap))
     return entries
 
 

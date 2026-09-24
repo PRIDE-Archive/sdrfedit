@@ -1,3 +1,5 @@
+import type { TemplateRef } from './template-catalog';
+import type { TemplateColumn } from './template';
 /**
  * SDRF Creation Wizard Models
  *
@@ -1491,10 +1493,20 @@ export function upsertDynamicColumnDefault(
  * Complete wizard state.
  */
 export interface WizardState {
+  selectedTemplates?: TemplateRef[];
+  templateSnapshotId?: string;
+  effectiveColumns?: TemplateColumn[];
+  resolvedTemplateRefs?: TemplateRef[];
+  leafTemplateRefs?: TemplateRef[];
+  dynamicTemplateValues?: Record<string, string>;
+  /** User-selected PRIDE project, retained with the saved wizard. */
+  projectAccession?: string;
   // Step 1: Experiment Setup
   /** @deprecated Prefer sampleTemplate; kept in sync for compatibility */
   template: WizardTemplate | null;
   sampleTemplate: WizardTemplate | null;
+  /** Additional sample-layer templates (clinical, oncology, environment). */
+  sampleMetadataTemplates?: string[];
   technologyTemplate: WizardTemplate | null;
   experimentTemplates: string[];
   sampleCount: number;
@@ -1595,8 +1607,12 @@ export function createEmptyWizardState(): WizardState {
   return {
     // Step 1
     template: null,
+    selectedTemplates: [],
+    effectiveColumns: [],
+    dynamicTemplateValues: {},
     sampleTemplate: null,
-    technologyTemplate: 'ms-proteomics',
+    sampleMetadataTemplates: [],
+    technologyTemplate: null,
     experimentTemplates: [],
     sampleCount: 1,
     experimentDescription: '',

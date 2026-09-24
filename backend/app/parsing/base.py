@@ -17,6 +17,10 @@ SECTION_HEADING_RE = re.compile(r"^\s{0,3}#{1,4}\s+(.+?)\s*$", re.MULTILINE)
 HEADING_NUMBER_RE = re.compile(r"^(?:\d+(?:\.\d+)*[.)]?|[ivxlc]+[.)])\s+")
 
 SECTION_ALIASES = {
+    "main text": "body",
+    "full text": "body",
+    "article text": "body",
+    "body": "body",
     "abstract": "abstract",
     "introduction": "introduction",
     "background": "introduction",
@@ -56,6 +60,13 @@ class ParsedDocument:
 
     def preview(self, limit: int = 600) -> str:
         return self.markdown[:limit]
+
+    def evidence_sections(self) -> dict[str, str]:
+        """Use original keys for reads, including documents parsed before aliases changed."""
+        sections = self.sections or {"body": self.markdown}
+        # Heading labels describe parser output, not evidence quality.
+        return {name: text for name, text in sections.items() if text.strip()}
+
 
 
 class PdfParser(ABC):

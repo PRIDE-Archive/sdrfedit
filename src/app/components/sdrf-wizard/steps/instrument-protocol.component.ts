@@ -1,3 +1,4 @@
+import { genericTemplateColumns, templateFieldValue, templateFieldError, templateOptions } from '../../../core/utils/template-fields';
 /**
  * Instrument & Protocol Component (Step 5)
  *
@@ -45,7 +46,7 @@ import { unimodService, UnimodEntry } from '../../../core/services/unimod.servic
       <div class="step-header">
         <h3>Instrument & Protocol</h3>
         <p class="step-description">
-          Configure the mass spectrometer, enzyme, and post-translational modifications.
+          Complete the protocol fields required by your selected templates.
         </p>
       </div>
 
@@ -68,11 +69,12 @@ import { unimodService, UnimodEntry } from '../../../core/services/unimod.servic
         </div>
       </div>
 
+      @if (hasColumn('comment[instrument]')) {
       <!-- Instrument Selection -->
       <div class="form-section">
         <label class="form-label">
-          Mass Spectrometer
-          <span class="required">*</span>
+          Instrument
+          @if (requiredColumn('comment[instrument]')) { <span class="required">*</span> }
           <span class="help-text">Select the instrument used for analysis</span>
         </label>
 
@@ -117,11 +119,13 @@ import { unimodService, UnimodEntry } from '../../../core/services/unimod.servic
         </div>
       </div>
 
+      }
+      @if (hasColumn('comment[cleavage agent details]')) {
       <!-- Cleavage Agent -->
       <div class="form-section">
         <label class="form-label">
           Cleavage Agent / Enzyme
-          <span class="required">*</span>
+          @if (requiredColumn('comment[cleavage agent details]')) { <span class="required">*</span> }
           <span class="help-text">Enzyme used for protein digestion</span>
         </label>
 
@@ -146,7 +150,8 @@ import { unimodService, UnimodEntry } from '../../../core/services/unimod.servic
         }
       </div>
 
-      @if (plexSuggestionLabel()) {
+      }
+      @if (hasColumn('comment[modification parameters]') && plexSuggestionLabel()) {
         <div class="plex-suggest">
           <div class="plex-suggest-text">
             Runs &amp; Files used <strong>{{ plexSuggestionLabel() }}</strong>.
@@ -158,6 +163,7 @@ import { unimodService, UnimodEntry } from '../../../core/services/unimod.servic
         </div>
       }
 
+      @if (hasColumn('comment[precursor mass tolerance]') || hasColumn('comment[fragment mass tolerance]')) {
       <div class="form-section">
         <h4>Mass tolerances (recommended)</h4>
         <p class="help-text">Enter the database search settings as a number with ppm, Da, or mmu.
@@ -186,6 +192,8 @@ import { unimodService, UnimodEntry } from '../../../core/services/unimod.servic
         </p>
       </div>
 
+      }
+      @if (hasColumn('comment[modification parameters]')) {
       <!-- Modifications -->
       <div class="form-section">
         <label class="form-label">
@@ -348,11 +356,37 @@ import { unimodService, UnimodEntry } from '../../../core/services/unimod.servic
           </div>
         }
 
+      }
+      @for (column of genericColumns(); track column.name) {
+        <div class="form-section">
+          <label class="form-label" [attr.for]="'template-' + column.name">
+            {{ column.name }}
+            @if (column.requirement === 'required') { <span class="required">*</span> }
+          </label>
+          <p class="help-text">{{ column.description }}</p>
+          @if (options(column).length) {
+            <select class="form-input" [id]="'template-' + column.name" [ngModel]="fieldValue(state(), column)"
+              (ngModelChange)="wizardState.setTemplateValue(column.name, $event)">
+              <option value="">Select a value</option>
+              @for (value of options(column); track value) { <option [value]="value">{{ value }}</option> }
+              @if (column.allowNotAvailable) { <option value="not available">not available</option> }
+              @if (column.allowNotApplicable) { <option value="not applicable">not applicable</option> }
+            </select>
+          } @else {
+            <input class="form-input" [id]="'template-' + column.name" type="text"
+              [ngModel]="fieldValue(state(), column)" (ngModelChange)="wizardState.setTemplateValue(column.name, $event)" />
+          }
+          @if (fieldError(column, fieldValue(state(), column)); as message) { <p class="help-text">{{ message }}</p> }
+          @for (rule of column.validators || []; track $index) {
+            @if (rule.params.description) { <p class="help-text">{{ rule.params.description }}</p> }
+          }
+        </div>
+      }
       <!-- Validation Message -->
       @if (!wizardState.isStep5Valid()) {
         <div class="validation-message">
           <span class="warning-icon">!</span>
-          Please select an instrument and cleavage agent, and correct any invalid mass tolerances to continue.
+          Complete the required template fields and correct invalid values to continue.
         </div>
       }
     </div>
@@ -890,6 +924,12 @@ export class InstrumentProtocolComponent {
   private readonly unimod = unimodService;
 
   readonly state = this.wizardState.state;
+  readonly genericColumns = computed(() => genericTemplateColumns(this.state()));
+  readonly options = templateOptions;
+  readonly fieldValue = templateFieldValue;
+  readonly fieldError = templateFieldError;
+  hasColumn(name: string): boolean { return !!this.state().effectiveColumns?.some(c => c.name === name); }
+  requiredColumn(name: string): boolean { return !!this.state().effectiveColumns?.some(c => c.name === name && c.requirement === 'required'); }
 
   readonly plexSuggestionLabel = computed(() => {
     const kits = collectUsedPlexKitIds(this.state());

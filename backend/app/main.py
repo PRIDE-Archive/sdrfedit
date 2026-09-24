@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import get_settings
 from .celllines.store import get_cellline_store
 from .rag.store import get_spec_store
-from .routers import chat, uploads
+from .routers import chat, uploads, template_catalog
 from .schemas import HealthResult
 
 settings = get_settings()
@@ -35,6 +35,7 @@ app.add_middleware(
 
 app.include_router(chat.router)
 app.include_router(uploads.router)
+app.include_router(template_catalog.router)
 
 
 @app.get("/api/health", response_model=HealthResult, tags=["meta"])

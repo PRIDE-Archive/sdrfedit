@@ -51,6 +51,8 @@ export interface SdrfTable {
  * Optional metadata about the SDRF table.
  */
 export interface SdrfTableMetadata {
+  templateSnapshotId?: string;
+  templateRefs?: Array<{ name: string; version: string }>;
   /** Original filename if loaded from file */
   filename?: string;
 

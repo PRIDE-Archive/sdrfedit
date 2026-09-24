@@ -224,6 +224,15 @@ PDF parsing requires the existing MinerU configuration; XML does not. Only an ac
 `%PDF-` response is accepted. A discovered Sci-Hub link is not marked as open-access
 or assigned a license; discovery is not proof that the PDF is downloadable.
 
+Downloaded PDFs and uploaded PDFs use the same configured MinerU parser and
+session document store. Discovery identifiers are carried into PDF metadata even
+when the model passes only a URL to `parse_pdf_url`. Successful `read_document`
+pages are recorded on the document across turns, including partial-page coverage;
+unread pages remain visible without blocking suggestions supported by already-read passages. `list_documents` exposes identifiers
+and pending `nextReads`. Repeated publication lookup reports matching parsed
+`sessionDocuments` even when Europe PMC has only an abstract. Its
+`fullTextAvailable=false` flag does not invalidate a parsed PDF from another source.
+
 Original downloads are cached in `PUBLICATION_CACHE_DIR` (default `data/publications`)
 for `PUBLICATION_CACHE_TTL_SECONDS` (default seven days), with a size limit of
 `PUBLICATION_CACHE_MAX_MB` (default 256). Cleanup runs on cache access. Mount this path
@@ -233,3 +242,53 @@ retains the original download for retry. Tool results distinguish `download_fail
 `parse_failed`, and `ready`; discovery distinguishes `abstract_only`, `unavailable`,
 `identifier_conflict`, and `needs_confirmation`. Transient HTTP errors retry up to
 three attempts; abstracts are not treated as full-text evidence.
+
+### Independent abstract and supplementary evidence
+
+`find_publication` stores the available Europe PMC abstract as a separate session
+document, labelled `evidenceKind=abstract`, without truncating it to 4,000 characters.
+`get_publication_abstract(pmid)` provides a PubMed EFetch fallback. Neither source
+requires article XML, and reading an abstract never satisfies the setup evidence gate.
+
+`find_publication_supplements(pmid, doi)` independently inspects the publisher DOI
+landing page, the PMC article page when a PMCID is present, and NCBI's supplementary
+BioC listing. Each source reports its own outcome; no result is not proof that no
+supplements exist. JavaScript-only pages, anti-bot challenges and HTTP 403 may still
+prevent discovery or download. Pass accession to also check PRIDE project files. Third-party supplement mirrors are not searched automatically.
+
+`get_publication_supplement(url, member?)` downloads only a link discovered in the
+same session, or an explicit user-provided HTTP(S) link with userProvided=true (fileName supplies the extension for opaque download URLs). ZIP downloads list members before parsing a selected member. PDF uses
+the configured MinerU parser; XLSX/XLS preserve worksheet names and row numbers;
+CSV/TSV/TXT and DOCX are converted into readable sections. NCBI BioC yields converted
+text rather than the original spreadsheet layout. Originals use the publication
+cache; downloads keep normal proxy settings (the Sci-Hub exception is unchanged).
+Archives are read in memory, never extracted to filesystem paths, and limited to
+300 entries / 100 MB expanded. Parsed text is limited to 2 million characters.
+Unsupported, inaccessible and unparseable attachments return distinct outcomes.
+
+Supplement documents carry their parent DOI/PMID, source URL, archive member and
+`evidenceKind=supplement`. AI uses `read_document` with pagination and references
+file, sheet/section and row. A matching supplement with a successfully read passage satisfies the document
+availability check even without article XML, but is not labelled a full article.
+Prompts still require evidence for each proposed field and current-PXD sample counts;
+the gate does not establish that an arbitrary table supports a particular claim.
+The upload UI and /api/uploads/document accept PDF, XLSX, XLS, CSV, TSV, TXT, DOCX and ZIP. ZIP uploads parse up to 20 supported members within the existing archive/text bounds, preserving member names; unsupported members are listed, and any supported member parse failure fails the upload explicitly. PRIDE files and user links retain their actual provenance without inferred paper identifiers.
+
+### Content-based setup checks
+
+Setup checks no longer whitelist or blacklist section headings or require the entire
+paper to be read. They check that an identified, matching non-abstract document has
+actually returned a nonempty passage. `readingStatus` reports exact ranges and
+`nextReads` lists remaining content, including gaps; neither is a universal checklist.
+The model must assess evidence per field and cite relevant passages. Supported
+template cards can be proposed while sample count remains unresolved. Passing this
+check does not verify scientific claims or imply whole-document coverage. Abstract
+classification is based on source metadata, not a section's name.
+
+## Dynamic SDRF template catalogue
+
+The wizard now requires this backend for template discovery and rule resolution, even when the AI assistant is disabled. Install the current `requirements.txt` (including `jsonschema` and `semantic-version`) and restart the backend alongside the rebuilt frontend. No LLM key is required for `/api/template-catalog/*`.
+
+Each entry to template selection checks `bigbio/sdrf-templates/main`; downloads use one pinned commit. Complete snapshots persist under `data/template_catalog/` (mount this directory if persistence is desired). A failed update returns the previous complete snapshot with `stale: true`; first-load failure returns 503. Optionally set `TEMPLATE_GITHUB_TOKEN` for REST rate limits. Public Git ref discovery is also supported.
+
+See [dynamic template rules](../docs/template-selection-rules.md) for the API, migration behavior and the distinction between snapshot preflight and full ontology/SDRF validation.

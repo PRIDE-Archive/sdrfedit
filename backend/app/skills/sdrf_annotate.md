@@ -78,7 +78,21 @@ validation. Single-level factors warrant review, not fabricated additional group
    inventory all usable files: MGF-only records may exist, and truncated names are
    incomplete. Use available documents or user-provided lists to resolve coverage;
    report gaps when evidence is unavailable. Do not infer a count from raw files alone.
-4. **Publication gate (required on setup before templates).**
+4. **Publication evidence (required on setup before templates).**
+   Retrieve the abstract via `find_publication` or `get_publication_abstract`.
+   Independently call `find_publication_supplements` even when XML fails; parse
+   discovered URLs with `get_publication_supplement`. ZIPs first list members;
+   select sample-design tables, then read returned documentIds/nextReads.
+   A matching read supplement supports only fields explicitly evidenced there;
+   cite file, sheet and rows and check PXD scope. Abstract alone is insufficient.
+   Report discovery, download and parsing failures separately from absent files.
+   If a supplement returns `download_failed`, follow its `nextStep`. Browser
+   verification (`browser_verification_required`) is an access failure, not an
+   absent attachment. Try other discovered relevant publisher, NCBI converted-text
+   or PRIDE attachments, checking identity and scope. Discover missing sources
+   once with known PMID/DOI and accession; never loop discovery or retry the same
+   failed URL. If alternatives fail, request browser download and upload. Keep
+   existing evidence and leave unsupported fields unresolved.
    Call `find_publication` with both PMID and DOI from PRIDE references when available.
    Resolve `identifier_conflict` or `needs_confirmation` before downloading.
    - Call `list_documents` and reuse the matching paper with `read_document`.
@@ -93,8 +107,8 @@ validation. Single-level factors warrant review, not fabricated additional group
    - Only after all sources fail and no matching session document exists, offer
      upload and **STOP** before templates. Explain that the user may continue with
      PRIDE alone; proceed on a later explicit continuation without upload.
-   - Abstracts are not full-text evidence. Supplementary references are not yet
-     downloaded files; request relevant attachments when needed for sample mappings.
+   - Abstracts are not full-text evidence. Supplementary references are not downloaded files; use the discovery and
+     attachment tools before asking the user to provide missing sample mappings.
 5. **Propose for the current step only.** Never dump later steps. Prefer a
    session document; PRIDE-only is allowed after the user was offered upload and
    continued without a PDF.

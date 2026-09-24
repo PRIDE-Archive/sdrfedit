@@ -4,6 +4,7 @@
  * Converts WizardState into an SdrfTable structure.
  */
 
+import { templateFieldValue } from '../utils/template-fields';
 import { normalizeMassTolerance } from '../utils/mass-tolerance';
 
 import { Injectable, inject } from '@angular/core';
@@ -147,10 +148,7 @@ export class WizardGeneratorService {
     for (const meta of charCols) {
       const lower = meta.name.toLowerCase();
       if (emitted.has(lower)) continue;
-      if (meta.requirement === 'recommended' && !this.hasCharacteristicOutputValue(state, meta.name)) {
-        continue;
-      }
-      if (meta.requirement !== 'required' && meta.requirement !== 'recommended') {
+      if (meta.requirement !== 'required' && !this.hasCharacteristicOutputValue(state, meta.name)) {
         continue;
       }
       table.columns.push(this.createDynamicCharacteristicColumn(state, meta.name, columnPosition++));
@@ -225,6 +223,9 @@ export class WizardGeneratorService {
       table.columns.push(this.createFactorColumn(state, factor, columnPosition++));
     }
 
+    if (state.templateSnapshotId) this.applyEffectiveSchema(table, state);
+    const accession = state.projectAccession?.match(/^PXD\d+$/i)?.[0]?.toUpperCase();
+    if (accession) table.metadata = { ...table.metadata, filename: `${accession}.sdrf.tsv` };
     return table;
   }
 
@@ -605,29 +606,48 @@ export class WizardGeneratorService {
   }
 
   private createSdrfTemplateColumns(state: WizardState, startPosition: number): SdrfColumn[] {
-    const leaves = this.templateService.getLeafTemplateIds({
-      technologyTemplate: state.technologyTemplate,
-      sampleTemplate: getSampleTemplateId(state),
-      experimentTemplates: state.experimentTemplates || [],
-    });
+    const refs = state.leafTemplateRefs || [];
+    return refs.map((ref, i) => ({
+      name: 'comment[sdrf template]', type: 'comment' as ColumnType,
+      value: `${ref.name} ${formatSdrfSemver(ref.version)}`,
+      modifiers: [], columnPosition: startPosition + i,
+    }));
+  }
 
-    if (leaves.length === 0) {
-      leaves.push('ms-proteomics');
+  private applyEffectiveSchema(table: SdrfTable, state: WizardState): void {
+    if (!state.effectiveColumns?.length || !state.leafTemplateRefs?.length) {
+      throw new Error('Resolve the selected template snapshot before generating SDRF.');
     }
-
-    return leaves.map((name, i) => {
-      const version = formatSdrfSemver(
-        this.templateService.getTemplateVersion(name) || SDRF_SPEC_VERSION
-      );
-      return {
-        name: 'comment[sdrf template]',
-        type: 'comment' as ColumnType,
-        // Spec preferred simple format: "template_name vX.Y.Z"
-        value: `${name} ${version}`,
-        modifiers: [],
-        columnPosition: startPosition + i,
-      };
-    });
+    const existing = table.columns;
+    const columns: SdrfColumn[] = [];
+    for (const definition of state.effectiveColumns) {
+      const explicit = state.dynamicTemplateValues?.[definition.name];
+      const defaultValue = templateFieldValue(state, definition);
+      let adapted = existing.filter(c => c.name === definition.name);
+      // Technology type is governed by the template enum, never by the legacy MS default.
+      if (definition.name === 'technology type') adapted = [];
+      if (definition.name === 'comment[instrument]' && !state.instrument) adapted = [];
+      if (definition.name === 'comment[cleavage agent details]' && !state.cleavageAgent) adapted = [];
+      if (explicit !== undefined || !adapted.length) {
+        if (defaultValue || definition.requirement === 'required') {
+          columns.push({ name: definition.name,
+            type: definition.name.startsWith('characteristics[') ? 'characteristics' : definition.name === 'source name' ? 'source_name' : 'comment',
+            value: defaultValue, modifiers: [], columnPosition: 0,
+            isRequired: definition.requirement === 'required' });
+        }
+      } else {
+        for (const column of adapted) {
+          columns.push({ ...column, isRequired: definition.requirement === 'required',
+            value: column.value === 'not available' && defaultValue ? defaultValue : column.value });
+        }
+      }
+    }
+    columns.push(...existing.filter(c => c.type === 'factor_value'));
+    const priority = (c: SdrfColumn) => c.type === 'source_name' ? 0 : c.type === 'characteristics' ? 1 : c.name === 'assay name' ? 2 : c.name === 'technology type' ? 3 : c.type === 'factor_value' ? 5 : 4;
+    columns.sort((a, b) => priority(a) - priority(b));
+    table.columns = columns.map((column, columnPosition) => ({ ...column, columnPosition }));
+    table.metadata = { ...table.metadata, templateSnapshotId: state.templateSnapshotId,
+      templateRefs: state.leafTemplateRefs };
   }
 
   private createFactorColumn(

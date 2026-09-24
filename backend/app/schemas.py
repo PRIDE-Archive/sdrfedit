@@ -179,6 +179,9 @@ class WizardSnapshot(BaseModel):
     currentStep: int = 0
     currentStepId: WizardStepId | None = None
     sampleTemplate: str | None = None
+    sampleMetadataTemplates: list[str] = Field(default_factory=list)
+    templateSnapshotId: str | None = None
+    selectedTemplates: list[dict[str, str]] = Field(default_factory=list)
     technologyTemplate: str | None = None
     experimentTemplates: list[str] = Field(default_factory=list)
     sampleCount: int = 0

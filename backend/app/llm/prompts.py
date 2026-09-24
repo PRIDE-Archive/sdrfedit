@@ -37,10 +37,8 @@ WIZARD_STEPS_DOC = """The Create New SDRF wizard has 6 steps (new layered UI):
 STEP_GOALS: dict[WizardStepId, str] = {
     "setup": (
         "PRIMARY: recommend the correct template combination — one technology "
-        "(required, usually ms-proteomics), zero or one applicable sample template "
-        "(human, vertebrates, invertebrates, plants, metaproteomics, human-gut, soil, water, …), "
-        "and zero or more experiment add-ons (cell-lines, dia-acquisition, "
-        "crosslinking, immunopeptidomics, single-cell, …). The templates determine "
+        "(required), any compatible sample templates and experiment add-ons from the pinned catalogue. "
+        "Use validate_template_combination for inherited dependencies and exclusions. The templates determine "
         "which characteristics columns become required/recommended on Step 2. "
         "THEN determine sampleCount from distinct sources supported within the current "
         "accession and annotation scope. Sum biological replicates across conditions "
@@ -238,14 +236,40 @@ SETUP_PROCEDURE = """Setup decision procedure (follow in order — STOP after pr
    get_pride_raw_files separately before proposing sampleCount, reusing evidence
    already gathered. Reconcile the accession scope and file coverage with the paper;
    neither rawFileCount alone nor a whole-paper total determines sampleCount.
-2. Publication gate (before templates): obtain a session document from JATS XML or PDF.
+2. Publication evidence (before templates): independently collect abstract, article and supplements.
+   - find_publication returns an abstract document when available. Otherwise try
+     get_publication_abstract with the PMID. Abstracts never count as full papers.
+   - Call find_publication_supplements with the current PXD accession independently of XML/PDF success, especially
+     when sample design is deferred to a supplementary table. Use returned URLs
+     with get_publication_supplement; for ZIP, list members then select the relevant
+     Table 1/sample-design file. Read its relevant sections and pagination; do not assume headings or require unrelated pages.
+   - A matching, read supplementary table can support explicitly documented setup
+     values even without full text. Cite attachment, sheet/section and rows and
+     reconcile the current PXD scope. Mere download or an unrelated table is not
+     evidence for sampleCount. Omit unresolved counts while proposing supported templates.
+   - Report abstract/article/supplement status separately. not_found means not
+     discovered by those sources, not proof no attachments exist. 403 means download
+     denied, not missing evidence everywhere. Never repeatedly fetch a failed URL.
+   - On supplement download_failed (including browser_verification_required or
+     html_response), follow nextStep: try remaining discovered relevant publisher,
+     NCBI converted-text or PRIDE attachments before requesting manual upload.
+     Discover missing sources once using known PMID/DOI and current accession;
+     do not loop discovery or retry failed URLs. Verify each alternative's identity
+     and scope. If alternatives fail, explain the access problem and request browser
+     download/upload; preserve existing evidence and leave unsupported fields unresolved.
+   Continue article acquisition independently:
    a. Call find_publication with both PMID and DOI from PRIDE when available.
       Stop and ask for clarification on identifier_conflict or needs_confirmation.
    b. Call list_documents and reuse the matching article with read_document.
+      A Sci-Hub PDF parsed by MinerU is a session document just like an uploaded
+      PDF. fullTextAvailable=false describes Europe PMC XML availability only;
+      it does not invalidate a matching parsed PDF. Reuse sessionDocuments from
+      find_publication and use nextReads to locate unread passages needed for each field. Completed
+      reads persist across turns while the session document exists.
    c. If fullTextAvailable, call get_publication_full_text first. It stores the full
       XML article as a session document. Call read_document on its documentId.
    d. If XML is unavailable or fails, try each pdfUrls candidate with parse_pdf_url
-      until one succeeds, then read_document (methods/results/tables).
+      until one succeeds, then read relevant passages with read_document using actual availableSections.
    e. If XML and Europe PMC PDF candidates are unavailable or fail, and a DOI is
       available, call find_publication with that DOI and useFallback=true once to
       discover a Sci-Hub PDF. Try returned candidates with parse_pdf_url, passing
@@ -255,9 +279,10 @@ SETUP_PROCEDURE = """Setup decision procedure (follow in order — STOP after pr
       upload and STOP before proposing templates. Explain that the user may continue
       with PRIDE metadata alone. On a later explicit continuation, proceed using PRIDE.
       An abstract is never full-text evidence. Supplementary references are not
-      downloaded attachments; request relevant files when sample mappings need them.
+      downloaded attachments: discover and parse the attachments first. Request
+      user-provided files only when relevant sources cannot be retrieved.
 3. Call list_sdrf_templates (by layer if needed) so you use real template ids.
-4. From PRIDE / paper titles/methods keywords pick: technology (one), sample (zero or one),
+4. From PRIDE / paper titles/methods keywords pick: technology (one), compatible sample templates (zero or more),
    experiment add-ons (0+). TMT/iTRAQ/SILAC are NOT separate templates.
    - Pure cultures of fungi (including yeast), bacteria, or other organisms without
      a specialized sample template: use ms-proteomics with sample=null. Explicitly
@@ -702,6 +727,8 @@ def render_wizard_context(snapshot: WizardSnapshot | None) -> str:
         f"- step: {snapshot.currentStep} ({snapshot.currentStepId or 'unknown'})",
         f"- technology template: {snapshot.technologyTemplate or '(none)'}",
         f"- sample template: {snapshot.sampleTemplate or '(none)'}",
+        f"- template catalogue snapshot: {snapshot.templateSnapshotId or 'not loaded'}",
+        f"- sample metadata add-ons: {', '.join(snapshot.sampleMetadataTemplates) or '(none)'}",
         f"- experiment templates: {', '.join(snapshot.experimentTemplates) or '(none)'}",
         f"- sample count: {snapshot.sampleCount}",
     ]
@@ -786,3 +813,28 @@ def render_wizard_context(snapshot: WizardSnapshot | None) -> str:
         "or wrong for the step the user is on."
     )
     return "\n".join(lines)
+
+
+# Cross-cutting evidence instructions are appended to the assistant's system prompt.
+SYSTEM_PROMPT += """
+Evidence checks are per proposed field, not per paper heading or whole-document completion.
+Use actual availableSections and returned sectionInfo/readRanges. Do not assume Methods,
+Results or body headings exist, or repeatedly request a nonexistent section. Read relevant
+passages and follow pagination where the needed evidence is cut off; unread unrelated
+sections do not prevent proposals supported by passages already read. Do not claim a
+whole paper is read when only part is returned. Citation and reasoning must identify the
+source passage (document/file, section/sheet and page/row/offset when available).
+Propose supported templates even if sampleCount lacks evidence; omit unresolved fields
+and state exactly what additional information is needed. A successful document check
+means matching content was read, not that any particular count or mapping was verified.
+Abstract-only evidence remains abstract-only. Do not fabricate missing values.
+"""
+
+SYSTEM_PROMPT += """
+Users can upload PDF, XLSX, XLS, CSV, TSV, TXT, DOCX or ZIP. ZIP sections preserve member names.
+Read relevant actual sections. For a direct attachment URL explicitly supplied by the user,
+call get_publication_supplement with userProvided=true and fileName if the URL has no extension.
+Never invent URLs. PRIDE candidates and user links have unverified paper identity: inspect
+contents, cite actual provenance and ask for clarification if the relationship is uncertain.
+Do not invent DOI/PMID metadata for them.
+"""

@@ -175,6 +175,9 @@ export interface WizardSnapshot {
   currentStep: number;
   currentStepId: AssistantStepId | null;
   sampleTemplate: string | null;
+  sampleMetadataTemplates?: string[];
+  templateSnapshotId?: string;
+  selectedTemplates?: Array<{ name: string; version: string }>;
   technologyTemplate: string | null;
   experimentTemplates: string[];
   sampleCount: number;

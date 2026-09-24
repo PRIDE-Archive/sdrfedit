@@ -16,9 +16,12 @@ async def test_publication_discovery_omits_content_and_duplicate_urls(monkeypatc
         "nextStep": "Try pdfUrls", "warnings": [],
     }))
     result = await registry._find_publication({"pmid": "123"}, "session")
-    assert result == {"found": True, "status": "full_text_available", "pmcid": "PMC123",
-                      "title": "Paper", "fullTextAvailable": True, "pdfCandidates": [pdf],
-                      "nextStep": "Try pdfCandidates"}
+    assert result["abstract"]["evidenceKind"] == "abstract"
+    assert result["abstract"]["documentId"]
+    assert result["supplements"]["status"] == "not_checked"
+    assert "find_publication_supplements" in result["nextStep"]
+    assert {k: result[k] for k in ("found", "status", "pmcid", "title", "fullTextAvailable", "pdfCandidates")} == {"found": True, "status": "full_text_available", "pmcid": "PMC123",
+                      "title": "Paper", "fullTextAvailable": True, "pdfCandidates": [pdf]}
     assert "1 PDF link(s)" in registry._summarize_publication(result)
 
 
@@ -50,6 +53,8 @@ async def test_listing_is_compact_and_document_can_still_be_read(documents):
     assert result == {"documents": [{
         "documentId": stored.document_id, "fileName": "paper.xml",
         "title": "Example paper", "availableSections": ["methods"],
+        "identifiers": {"pmcid": "PMC123"},
+        "nextReads": [{"documentId": stored.document_id, "sections": ["methods"], "offset": 0}],
     }]}
     read = await registry._read_document({"documentId": stored.document_id, "sections": ["methods"]}, "session")
     assert read["sections"] == {"methods": "Protocol"}
@@ -61,6 +66,8 @@ async def test_plain_document_lists_readable_body_without_empty_title(documents)
     result = await registry._list_documents({}, "session")
     assert result == {"documents": [{
         "documentId": stored.document_id, "fileName": "notes.txt", "availableSections": ["body"],
+        "identifiers": {},
+        "nextReads": [{"documentId": stored.document_id, "sections": ["body"], "offset": 0}],
     }]}
     read = await registry._read_document({"documentId": stored.document_id, "sections": ["body"]}, "session")
     assert read["sections"] == {"body": "Notes"}

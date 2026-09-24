@@ -1,9 +1,12 @@
+import { genericTemplateColumns, templateFieldValue, templateFieldError } from '../utils/template-fields';
 /**
  * Wizard State Service
  *
  * Signal-based state management for the SDRF Creation Wizard.
  */
 
+import type { TemplateRef } from '../models/template-catalog';
+import type { TemplateSelection } from '../models/template';
 import { Injectable, signal, computed, inject } from '@angular/core';
 import {
   WizardState,
@@ -185,24 +188,19 @@ export class WizardStateService {
 
   // ============ Validation Computed ============
 
-  readonly isStep1Valid = computed(() => {
+  readonly templateSelection = computed((): TemplateSelection => {
     const state = this._state();
-    if (state.sampleCount < 1) return false;
-    return this.templateService.validateTemplateCombination({
+    return {
+      selectedTemplates: state.selectedTemplates,
+      snapshotId: state.templateSnapshotId,
       technologyTemplate: state.technologyTemplate,
       sampleTemplate: getSampleTemplateId(state),
+      sampleMetadataTemplates: state.sampleMetadataTemplates || [],
       experimentTemplates: state.experimentTemplates || [],
-    }).valid;
+    };
   });
-
-  readonly step1Combination = computed(() => {
-    const state = this._state();
-    return this.templateService.validateTemplateCombination({
-      technologyTemplate: state.technologyTemplate,
-      sampleTemplate: getSampleTemplateId(state),
-      experimentTemplates: state.experimentTemplates || [],
-    });
-  });
+  readonly step1Combination = computed(() => this.templateService.validateTemplateCombination(this.templateSelection()));
+  readonly isStep1Valid = computed(() => !this.templateService.isLoading() && this._state().sampleCount >= 1 && this.step1Combination().valid);
 
   readonly isStep2Valid = computed(() => {
     const state = this._state();
@@ -214,13 +212,8 @@ export class WizardStateService {
         getSpecialtyCharacteristicKey(c.name) !== 'material type'
     );
 
-    const characteristicsOk =
-      required.length === 0
-        ? (choices['characteristics[organism]'] || []).length >= 1 &&
-          (choices['characteristics[disease]'] || []).length >= 1 &&
-          (choices['characteristics[organism part]'] || []).length >= 1
-        : required.every(col => (choices[col.name] || []).length >= 1);
-
+    const characteristicsOk = !!state.effectiveColumns?.length
+      && required.every(col => (choices[col.name] || []).length >= 1);
     return characteristicsOk && this.isFactorsDefined();
   });
 
@@ -263,9 +256,13 @@ export class WizardStateService {
 
   readonly isStep5Valid = computed(() => {
     const state = this._state();
-    return state.instrument !== null && state.cleavageAgent !== null
+    const required = (name: string) => state.effectiveColumns?.some(c => c.name === name && c.requirement === 'required');
+    return (!required('comment[instrument]') || state.instrument !== null)
+      && (!required('comment[cleavage agent details]') || state.cleavageAgent !== null)
+      && (!required('comment[modification parameters]') || state.modifications.length > 0)
       && isValidMassTolerance(state.precursorMassTolerance)
-      && isValidMassTolerance(state.fragmentMassTolerance);
+      && isValidMassTolerance(state.fragmentMassTolerance)
+      && genericTemplateColumns(state).every(c => !templateFieldError(c, templateFieldValue(state, c)));
   });
 
   readonly isStep6Valid = computed(() => {
@@ -401,36 +398,68 @@ export class WizardStateService {
   /**
    * Set the sample template (also syncs legacy `template` field).
    */
-  setSampleTemplate(template: WizardTemplate | null): void {
-    this._state.update(s => ({
-      ...s,
-      sampleTemplate: template,
-      template,
+  readonly templateUpdateNotice = signal('');
+
+  async enterTemplateSelection(): Promise<void> {
+    const oldCatalog = this.templateService.catalog();
+    await this.templateService.fetchTemplates(true);
+    const previous = this._state();
+    const snapshot = this.templateService.catalog();
+    if (!snapshot) return;
+    const oldRefs = previous.selectedTemplates ?? this.templateService.selectionRefs(this.templateSelection());
+    const refs = oldRefs.map(ref => ({ name: ref.name, version: this.templateService.getTemplateVersion(ref.name) || ref.version }));
+    const changed = previous.templateSnapshotId && previous.templateSnapshotId !== snapshot.snapshotId;
+    const oldEntries = new Map(oldCatalog?.templates.map(t => [t.name, t]) || []);
+    const added = snapshot.templates.filter(t => !oldEntries.has(t.name)).map(t => t.name);
+    const removed = [...oldEntries.keys()].filter(name => !snapshot.templates.some(t => t.name === name));
+    const updated = snapshot.templates.filter(t => {
+      const old = oldEntries.get(t.name);
+      const comparable = (entry: typeof t) => JSON.stringify({ ...entry, source: undefined });
+      return old && comparable(old) !== comparable(t);
+    }).map(t => t.name);
+    const details = [added.length ? `Added: ${added.join(', ')}.` : '', removed.length ? `Removed: ${removed.join(', ')}.` : '',
+      updated.length ? `Updated definitions: ${updated.join(', ')}.` : ''].filter(Boolean).join(' ');
+    this.templateUpdateNotice.set(changed ? `The official catalogue changed. ${details} Your selection has been rechecked; review any conflicts before continuing.` : '');
+    this.applyTemplateRefs(refs, snapshot.snapshotId);
+  }
+
+  private applyTemplateRefs(refs: TemplateRef[], snapshotId = this._state().templateSnapshotId): void {
+    const byLayer = (layer: string) => refs.filter(ref => this.templateService.getTemplateInfo(ref.name)?.layer === layer).map(ref => ref.name);
+    const samples = byLayer('sample');
+    this._state.update(s => ({ ...s, selectedTemplates: refs, templateSnapshotId: snapshotId,
+      // Compatibility projections for old assistant actions, never used as selection authority.
+      technologyTemplate: byLayer('technology')[0] || null,
+      sampleTemplate: samples[0] || null, template: samples[0] || null,
+      sampleMetadataTemplates: samples.slice(1), experimentTemplates: byLayer('experiment'),
+      effectiveColumns: [], resolvedTemplateRefs: [], leafTemplateRefs: [], characteristicColumns: [],
     }));
   }
 
-  /**
-   * Set the technology template.
-   */
-  setTechnologyTemplate(template: WizardTemplate): void {
-    this._state.update(s => ({ ...s, technologyTemplate: template }));
+  toggleTemplate(name: string): void {
+    if (this.templateService.isLoading()) return;
+    const refs = this._state().selectedTemplates || [];
+    if (refs.some(ref => ref.name === name)) {
+      this.applyTemplateRefs(refs.filter(ref => ref.name !== name));
+      return;
+    }
+    const option = this.templateService.cachedResolution(this.templateSelection())?.availability[name];
+    if (!option || !['available', 'inherited'].includes(option.status)) return;
+    this.applyTemplateRefs([...refs, { name, version: this.templateService.getTemplateVersion(name) }]);
   }
 
-  setExperimentTemplates(templates: string[]): void {
-    this._state.update(s => ({ ...s, experimentTemplates: [...templates] }));
+  private setLayerTemplates(layer: string, names: string[]): void {
+    const refs = (this._state().selectedTemplates || []).filter(ref => this.templateService.getTemplateInfo(ref.name)?.layer !== layer);
+    this.applyTemplateRefs([...refs, ...names.map(name => ({ name, version: this.templateService.getTemplateVersion(name) }))]);
   }
 
-  toggleExperimentTemplate(templateId: string): void {
-    this._state.update(s => {
-      const current = s.experimentTemplates || [];
-      const exists = current.includes(templateId);
-      return {
-        ...s,
-        experimentTemplates: exists
-          ? current.filter(id => id !== templateId)
-          : [...current, templateId],
-      };
-    });
+  setSampleTemplate(template: WizardTemplate | null): void { this.setLayerTemplates('sample', template ? [template] : []); }
+  setTechnologyTemplate(template: WizardTemplate): void { this.setLayerTemplates('technology', [template]); }
+  setExperimentTemplates(templates: string[]): void { this.setLayerTemplates('experiment', templates); }
+  toggleSampleMetadataTemplate(template: string): void { this.toggleTemplate(template); }
+  toggleExperimentTemplate(template: string): void { this.toggleTemplate(template); }
+
+  setTemplateValue(name: string, value: string): void {
+    this._state.update(s => ({ ...s, dynamicTemplateValues: { ...s.dynamicTemplateValues, [name]: value } }));
   }
 
   /**
@@ -454,6 +483,13 @@ export class WizardStateService {
     });
   }
 
+  setProjectAccession(text: string | null | undefined): void {
+    const accession = text?.match(/\bPXD\d+\b/i)?.[0]?.toUpperCase();
+    if (accession && accession !== this._state().projectAccession) {
+      this._state.update(s => ({ ...s, projectAccession: accession }));
+    }
+  }
+
   setExperimentDescription(description: string): void {
     this._state.update(s => ({ ...s, experimentDescription: description }));
   }
@@ -465,22 +501,30 @@ export class WizardStateService {
    */
   async refreshCharacteristicColumns(signal?: AbortSignal): Promise<void> {
     const state = this._state();
-    const result = await this.templateService.getWizardCharacteristicColumns({
-      sampleTemplate: getSampleTemplateId(state),
-      experimentTemplates: state.experimentTemplates || [],
-    });
+    if (state.templateSnapshotId) await this.templateService.restoreSnapshot(state.templateSnapshotId);
+    else await this.templateService.fetchTemplates();
+    const selection = this.templateSelection();
+    const result = await this.templateService.resolveSelection(this.templateService.selectionRefs(selection), false,
+      state.templateSnapshotId || this.templateService.catalog()?.snapshotId);
     signal?.throwIfAborted();
-
-    const meta: WizardCharacteristicColumnMeta[] = result.all.map(c => ({
-      name: c.name,
-      description: c.description || '',
-      requirement: (c.requirement || 'optional') as WizardCharacteristicColumnMeta['requirement'],
-      ontologies: c.validators?.find(v => v.validatorName === 'ontology')?.params?.ontologies,
-      allowNotAvailable: c.allowNotAvailable,
-      allowNotApplicable: c.allowNotApplicable,
-    }));
-
-    this._state.update(s => ({ ...s, characteristicColumns: meta }));
+    if (!result.valid) throw new Error(result.errors.join(' '));
+    // Discard a response if the user changed templates while it was loading.
+    if (JSON.stringify(this._state().selectedTemplates) !== JSON.stringify(state.selectedTemplates)) return;
+    const meta = result.columns.filter(c => c.name.startsWith('characteristics[') && !isWizardSkippedCharacteristic(c.name))
+      .map(c => ({ name: c.name, description: c.description || '', requirement: c.requirement,
+        ontologies: [...new Set(c.validators?.flatMap(v => v.params.ontologies || []) || [])],
+        allowNotAvailable: c.allowNotAvailable, allowNotApplicable: c.allowNotApplicable }));
+    this._state.update(s => {
+      const characteristicChoices = { ...s.characteristicChoices };
+      for (const column of result.columns.filter(c => c.name.startsWith('characteristics['))) {
+        if (!characteristicChoices[column.name]?.length && column.default !== undefined) {
+          characteristicChoices[column.name] = [{ value: String(column.default) }];
+        }
+      }
+      return { ...s, characteristicColumns: meta, characteristicChoices, effectiveColumns: result.columns,
+        selectedTemplates: this.templateService.selectionRefs(selection), templateSnapshotId: result.snapshotId,
+        resolvedTemplateRefs: result.resolvedTemplates, leafTemplateRefs: result.leafTemplates };
+    });
   }
 
   addCharacteristicChoice(
@@ -1655,6 +1699,7 @@ export class WizardStateService {
   // ============ Reset ============
 
   reset(): void {
+    this.templateUpdateNotice.set('');
     this._state.set(createEmptyWizardState());
     this._currentStep.set(0);
   }
@@ -1673,6 +1718,7 @@ export class WizardStateService {
     const next: WizardState = {
       ...baseline,
       ...state,
+      selectedTemplates: state.selectedTemplates,
       sampleTemplate: getSampleTemplateId(state),
       template: getSampleTemplateId(state),
       characteristicChoices: state.characteristicChoices || {},
@@ -1687,6 +1733,7 @@ export class WizardStateService {
       customLabels: state.customLabels || [],
     };
     this._state.set(next);
+    if (step > 0) void this.refreshCharacteristicColumns().catch(() => this._currentStep.set(0));
     const maxStep = Math.max(0, WIZARD_STEPS.length - 1);
     this._currentStep.set(Math.min(Math.max(0, Math.floor(step) || 0), maxStep));
   }

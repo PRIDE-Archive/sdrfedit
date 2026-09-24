@@ -1,0 +1,230 @@
+[
+  {
+    "name": "affinity-proteomics",
+    "layer": "technology",
+    "extends": "sample-metadata@>=1.0.0",
+    "requires": null,
+    "excludes": null,
+    "mutuallyExclusiveWith": [
+      "ms-proteomics"
+    ]
+  },
+  {
+    "name": "base",
+    "layer": null,
+    "extends": null,
+    "requires": null,
+    "excludes": null,
+    "mutuallyExclusiveWith": null
+  },
+  {
+    "name": "cell-lines",
+    "layer": "experiment",
+    "extends": "sample-metadata@>=1.0.0",
+    "requires": [
+      {
+        "layer": "technology"
+      },
+      {
+        "layer": "sample"
+      }
+    ],
+    "excludes": null,
+    "mutuallyExclusiveWith": null
+  },
+  {
+    "name": "clinical-metadata",
+    "layer": "sample",
+    "extends": "sample-metadata@>=1.0.0",
+    "requires": null,
+    "excludes": null,
+    "mutuallyExclusiveWith": null
+  },
+  {
+    "name": "crosslinking",
+    "layer": "experiment",
+    "extends": "ms-proteomics@>=1.1.0",
+    "requires": null,
+    "excludes": null,
+    "mutuallyExclusiveWith": null
+  },
+  {
+    "name": "dia-acquisition",
+    "layer": "experiment",
+    "extends": "ms-proteomics@>=1.1.0",
+    "requires": null,
+    "excludes": null,
+    "mutuallyExclusiveWith": null
+  },
+  {
+    "name": "gc-ms-metabolomics",
+    "layer": "experiment",
+    "extends": "ms-metabolomics@>=1.0.0-dev",
+    "requires": null,
+    "excludes": null,
+    "mutuallyExclusiveWith": null
+  },
+  {
+    "name": "human",
+    "layer": "sample",
+    "extends": "sample-metadata@>=1.0.0",
+    "requires": null,
+    "excludes": null,
+    "mutuallyExclusiveWith": [
+      "vertebrates",
+      "invertebrates",
+      "plants"
+    ]
+  },
+  {
+    "name": "human-gut",
+    "layer": "sample",
+    "extends": "metaproteomics@>=1.0.0",
+    "requires": null,
+    "excludes": null,
+    "mutuallyExclusiveWith": [
+      "soil",
+      "water"
+    ]
+  },
+  {
+    "name": "immunopeptidomics",
+    "layer": "experiment",
+    "extends": "ms-proteomics@>=1.1.0",
+    "requires": null,
+    "excludes": null,
+    "mutuallyExclusiveWith": null
+  },
+  {
+    "name": "invertebrates",
+    "layer": "sample",
+    "extends": "sample-metadata@>=1.0.0",
+    "requires": null,
+    "excludes": null,
+    "mutuallyExclusiveWith": [
+      "human",
+      "vertebrates",
+      "plants"
+    ]
+  },
+  {
+    "name": "lc-ms-metabolomics",
+    "layer": "experiment",
+    "extends": "ms-metabolomics@>=1.0.0-dev",
+    "requires": null,
+    "excludes": null,
+    "mutuallyExclusiveWith": null
+  },
+  {
+    "name": "metaproteomics",
+    "layer": "sample",
+    "extends": "base@>=1.1.0",
+    "requires": [
+      {
+        "layer": "technology"
+      }
+    ],
+    "excludes": {
+      "templates": [
+        "sample-metadata"
+      ]
+    },
+    "mutuallyExclusiveWith": [
+      "human",
+      "vertebrates",
+      "invertebrates",
+      "plants"
+    ]
+  },
+  {
+    "name": "ms-metabolomics",
+    "layer": "technology",
+    "extends": "sample-metadata@>=1.0.0",
+    "requires": null,
+    "excludes": null,
+    "mutuallyExclusiveWith": [
+      "ms-proteomics",
+      "affinity-proteomics"
+    ]
+  },
+  {
+    "name": "ms-proteomics",
+    "layer": "technology",
+    "extends": "sample-metadata@>=1.0.0",
+    "requires": null,
+    "excludes": null,
+    "mutuallyExclusiveWith": [
+      "affinity-proteomics"
+    ]
+  },
+  {
+    "name": "oncology-metadata",
+    "layer": "sample",
+    "extends": "clinical-metadata@>=1.0.0",
+    "requires": null,
+    "excludes": null,
+    "mutuallyExclusiveWith": null
+  },
+  {
+    "name": "plants",
+    "layer": "sample",
+    "extends": "sample-metadata@>=1.0.0",
+    "requires": null,
+    "excludes": null,
+    "mutuallyExclusiveWith": [
+      "human",
+      "vertebrates",
+      "invertebrates"
+    ]
+  },
+  {
+    "name": "sample-metadata",
+    "layer": null,
+    "extends": "base@>=1.1.0",
+    "requires": null,
+    "excludes": null,
+    "mutuallyExclusiveWith": null
+  },
+  {
+    "name": "single-cell",
+    "layer": "experiment",
+    "extends": "ms-proteomics@>=1.1.0",
+    "requires": null,
+    "excludes": null,
+    "mutuallyExclusiveWith": null
+  },
+  {
+    "name": "soil",
+    "layer": "sample",
+    "extends": "metaproteomics@>=1.0.0",
+    "requires": null,
+    "excludes": null,
+    "mutuallyExclusiveWith": [
+      "human-gut",
+      "water"
+    ]
+  },
+  {
+    "name": "vertebrates",
+    "layer": "sample",
+    "extends": "sample-metadata@>=1.0.0",
+    "requires": null,
+    "excludes": null,
+    "mutuallyExclusiveWith": [
+      "human",
+      "invertebrates",
+      "plants"
+    ]
+  },
+  {
+    "name": "water",
+    "layer": "sample",
+    "extends": "metaproteomics@>=1.0.0",
+    "requires": null,
+    "excludes": null,
+    "mutuallyExclusiveWith": [
+      "human-gut",
+      "soil"
+    ]
+  }
+]

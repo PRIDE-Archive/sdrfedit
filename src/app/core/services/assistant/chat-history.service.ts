@@ -40,7 +40,7 @@ export class ChatHistoryService {
   });
 
   /** Create a blank session and make it active. */
-  create(backendSessionId: string, title = 'New chat'): AssistantChatSession {
+  create(backendSessionId = createId('sess'), title = 'New chat'): AssistantChatSession {
     const now = Date.now();
     const session: AssistantChatSession = {
       id: createId('chat'),

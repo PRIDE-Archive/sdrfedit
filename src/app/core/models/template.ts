@@ -1,3 +1,4 @@
+import type { TemplateRef } from './template-catalog';
 /**
  * Template Model
  *
@@ -23,7 +24,7 @@ export type RequirementLevel = 'required' | 'recommended' | 'optional';
 /**
  * Template layers - determines how templates can be combined.
  */
-export type TemplateLayer = 'technology' | 'sample' | 'experiment';
+export type TemplateLayer = string;
 
 /**
  * Column cardinality.
@@ -44,16 +45,21 @@ export interface TemplateRequirement {
  * Exclusion constraints from templates.yaml (excludes:).
  */
 export interface TemplateExclusions {
-  /** Template names that cannot be combined with this one */
+  /** Templates whose column contributions are excluded during composition */
   templates?: string[];
+  categories?: string[];
+  columns?: string[];
 }
 
 /**
  * Selection used for combination validation.
  */
 export interface TemplateSelection {
+  selectedTemplates?: TemplateRef[];
+  snapshotId?: string;
   technologyTemplate: string | null;
   sampleTemplate: string | null;
+  sampleMetadataTemplates?: string[];
   experimentTemplates: string[];
 }
 
@@ -70,6 +76,7 @@ export interface TemplateCombinationResult {
  * Parameters for a template validator.
  */
 export interface TemplateValidatorParams {
+  [key: string]: any;
   /** Ontologies to validate against (for ontology validator) */
   ontologies?: string[];
   /** Regex pattern for validation (for pattern validator) */
@@ -106,6 +113,8 @@ export interface TemplateValidator {
  * A column definition within a template.
  */
 export interface TemplateColumn {
+  default?: string;
+  provenance?: Array<{ template: string; version: string; url: string }>;
   /** Column name (e.g., "characteristics[organism]") */
   name: string;
   /** Description of the column */
@@ -255,9 +264,8 @@ export function parseTemplateRequires(raw: unknown): TemplateRequirement[] | und
  */
 export function parseTemplateExcludes(raw: unknown): TemplateExclusions | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
-  const templates = (raw as any).templates;
-  if (!Array.isArray(templates) || templates.length === 0) return undefined;
-  return { templates: templates.map(String) };
+  const value = raw as any;
+  return { templates: value.templates, categories: value.categories, columns: value.columns };
 }
 
 /**
@@ -266,7 +274,7 @@ export function parseTemplateExcludes(raw: unknown): TemplateExclusions | undefi
 export function isDevelopmentTemplate(info: Pick<TemplateInfo, 'id' | 'status' | 'version'>): boolean {
   if (info.status === 'development') return true;
   const version = info.version || '';
-  return version.includes('dev') || info.id.includes('metabolomics');
+  return /-/.test(version);
 }
 
 /**
@@ -290,7 +298,7 @@ export function convertYamlToTemplateDefinition(yaml: any): TemplateDefinition {
     description: yaml.description,
     version: yaml.version,
     extends: yaml.extends || null,
-    usableAlone: yaml.usable_alone ?? false,
+    usableAlone: yaml.usable_alone ?? true,
     layer: yaml.layer || null,
     requires: parseTemplateRequires(yaml.requires),
     excludes: parseTemplateExcludes(yaml.excludes),
@@ -308,11 +316,13 @@ export function convertYamlToTemplateDefinition(yaml: any): TemplateDefinition {
 /**
  * Convert YAML column to TemplateColumn.
  */
-function convertYamlToColumn(yaml: any): TemplateColumn {
+export function convertYamlToColumn(yaml: any): TemplateColumn {
   return {
     name: yaml.name,
     description: yaml.description || '',
     requirement: yaml.requirement || 'optional',
+    default: yaml.default,
+    provenance: yaml.provenance,
     allowNotApplicable: yaml.allow_not_applicable,
     allowNotAvailable: yaml.allow_not_available,
     allowAnonymized: yaml.allow_anonymized,
@@ -328,175 +338,23 @@ function convertYamlToColumn(yaml: any): TemplateColumn {
 /**
  * Convert YAML validator to TemplateValidator.
  */
-function convertYamlToValidator(yaml: any): TemplateValidator {
+export function convertYamlToValidator(yaml: any): TemplateValidator {
   return {
     validatorName: yaml.validator_name,
     params: {
+      ...yaml.params,
       ontologies: yaml.params?.ontologies,
-      pattern: yaml.params?.pattern,
-      values: yaml.params?.values,
-      errorLevel: yaml.params?.error_level,
-      description: yaml.params?.description,
-      examples: yaml.params?.examples,
-      caseSensitive: yaml.params?.case_sensitive,
-      minColumns: yaml.params?.min_columns,
-      columnName: yaml.params?.column_name,
-      columnNameWarning: yaml.params?.column_name_warning,
+      errorLevel: yaml.error_level ?? yaml.params?.error_level,
+      description: yaml.description ?? yaml.params?.description,
     },
   };
 }
 
-/**
- * Get icon for a template based on its name.
- */
-export function getTemplateIcon(templateId: string): string {
-  const iconMap: Record<string, string> = {
-    human: 'person',
-    'cell-lines': 'science',
-    vertebrates: 'pets',
-    invertebrates: 'bug_report',
-    plants: 'eco',
-    'ms-proteomics': 'analytics',
-    'affinity-proteomics': 'biotech',
-    'ms-metabolomics': 'science',
-    'dia-acquisition': 'assessment',
-    'single-cell': 'grain',
-    crosslinking: 'link',
-    immunopeptidomics: 'vaccines',
-    metaproteomics: 'diversity_3',
-    'clinical-metadata': 'medical_services',
-    'oncology-metadata': 'coronavirus',
-    'human-gut': 'accessibility',
-    soil: 'landscape',
-    water: 'water_drop',
-    'lc-ms-metabolomics': 'biotech',
-    'gc-ms-metabolomics': 'biotech',
-    olink: 'hub',
-    somascan: 'developer_board',
-  };
-  return iconMap[templateId] || 'category';
-}
-
-/**
- * Emoji used on wizard template cards.
- */
-export function getTemplateEmoji(templateId: string): string {
-  const emojiMap: Record<string, string> = {
-    human: '🧑',
-    'cell-lines': '🧫',
-    vertebrates: '🐁',
-    invertebrates: '🪲',
-    plants: '🌱',
-    'ms-proteomics': '📊',
-    'affinity-proteomics': '🧪',
-    'ms-metabolomics': '⚗️',
-    'dia-acquisition': '📈',
-    'single-cell': '🧬',
-    crosslinking: '🔗',
-    immunopeptidomics: '💉',
-    metaproteomics: '🦠',
-    'clinical-metadata': '🏥',
-    'oncology-metadata': '🎗️',
-    'human-gut': '🫁',
-    soil: '🪴',
-    water: '💧',
-    'lc-ms-metabolomics': '⚗️',
-    'gc-ms-metabolomics': '⚗️',
-    olink: '🧪',
-    somascan: '🧪',
-  };
-  return emojiMap[templateId] || '📋';
-}
-
-/**
- * Short card blurb for the wizard (keeps UI readable).
- */
-export function getTemplateShortDescription(templateId: string): string {
-  const descMap: Record<string, string> = {
-    'ms-proteomics': 'Mass spectrometry proteomics (DDA, DIA, PRM, SRM).',
-    'affinity-proteomics': 'Protein assays such as Olink and SomaScan.',
-    'ms-metabolomics': 'Mass spectrometry metabolomics (development).',
-    human: 'Human clinical or patient-derived samples.',
-    vertebrates: 'Non-human vertebrates (mouse, rat, zebrafish, …).',
-    invertebrates: 'Invertebrates (Drosophila, C. elegans, insects, …).',
-    plants: 'Plant samples (Arabidopsis, crops, …).',
-    'clinical-metadata': 'Treatment, demographics, and lifestyle metadata.',
-    'oncology-metadata': 'Tumor staging, grading, and oncology outcomes.',
-    metaproteomics: 'Microbial community / metaproteomics samples.',
-    'human-gut': 'Human gut metaproteomics (MIxS human-gut).',
-    soil: 'Soil metaproteomics with environment metadata.',
-    water: 'Water / aquatic metaproteomics samples.',
-    'cell-lines': 'Cultured cell lines (HeLa, HEK293, …).',
-    'dia-acquisition': 'DIA-specific acquisition columns.',
-    'single-cell': 'Single-cell proteomics (SCP) columns.',
-    immunopeptidomics: 'MHC / HLA immunopeptidomics columns.',
-    crosslinking: 'Crosslinking MS (XL-MS) columns.',
-    'lc-ms-metabolomics': 'LC-MS metabolomics add-on columns.',
-    'gc-ms-metabolomics': 'GC-MS metabolomics add-on columns.',
-  };
-  return descMap[templateId] || '';
-}
-
-/**
- * Display order within each layer — more common templates first.
- * Lower number = earlier. Unknown templates sort after known ones.
- */
-export function getTemplateSortOrder(templateId: string): number {
-  const order: Record<string, number> = {
-    // technology
-    'ms-proteomics': 10,
-    'affinity-proteomics': 20,
-    'ms-metabolomics': 30,
-    // sample
-    human: 10,
-    vertebrates: 20,
-    plants: 30,
-    invertebrates: 40,
-    'clinical-metadata': 50,
-    'oncology-metadata': 60,
-    metaproteomics: 70,
-    'human-gut': 80,
-    soil: 90,
-    water: 100,
-    // experiment
-    'cell-lines': 10,
-    'dia-acquisition': 20,
-    'single-cell': 30,
-    immunopeptidomics: 40,
-    crosslinking: 50,
-    'lc-ms-metabolomics': 60,
-    'gc-ms-metabolomics': 70,
-  };
-  return order[templateId] ?? 1000;
-}
-
-/**
- * Get display name for a template.
- */
+/** Presentation fallbacks; catalogue metadata supplies descriptions and ordering. */
+export function getTemplateIcon(_templateId: string): string { return 'category'; }
+export function getTemplateEmoji(_templateId: string): string { return '📋'; }
+export function getTemplateShortDescription(_templateId: string): string { return ''; }
+export function getTemplateSortOrder(_templateId: string): number { return 0; }
 export function getTemplateDisplayName(templateId: string): string {
-  const nameMap: Record<string, string> = {
-    human: 'Human Samples',
-    'cell-lines': 'Cell Lines',
-    vertebrates: 'Vertebrates (Non-Human)',
-    invertebrates: 'Invertebrates',
-    plants: 'Plants',
-    'ms-proteomics': 'MS Proteomics',
-    'affinity-proteomics': 'Affinity Proteomics',
-    'ms-metabolomics': 'MS Metabolomics',
-    'dia-acquisition': 'DIA Acquisition',
-    'single-cell': 'Single Cell',
-    crosslinking: 'Crosslinking (XL-MS)',
-    immunopeptidomics: 'Immunopeptidomics',
-    metaproteomics: 'Metaproteomics',
-    'clinical-metadata': 'Clinical Metadata',
-    'oncology-metadata': 'Oncology Metadata',
-    'human-gut': 'Human Gut Metaproteomics',
-    soil: 'Soil Metaproteomics',
-    water: 'Water Metaproteomics',
-    'lc-ms-metabolomics': 'LC-MS Metabolomics',
-    'gc-ms-metabolomics': 'GC-MS Metabolomics',
-    olink: 'Olink',
-    somascan: 'SomaScan',
-  };
-  return nameMap[templateId] || templateId.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  return templateId.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }

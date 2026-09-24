@@ -241,7 +241,7 @@ export class AssistantApiService {
     const form = new FormData();
     form.append('sessionId', sessionId);
     form.append('file', file, file.name);
-    return this.postForm('/api/uploads/pdf', form);
+    return this.postForm('/api/uploads/document', form);
   }
 
   async uploadText(sessionId: string, text: string, fileName = 'pasted-text.md'): Promise<AssistantUploadResult> {

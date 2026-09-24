@@ -9,6 +9,10 @@ from __future__ import annotations
 
 import json
 import hashlib
+import io
+import zipfile
+from urllib.parse import quote, urlsplit, unquote
+from pathlib import PurePosixPath
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -16,9 +20,9 @@ from ..config import get_settings
 from ..parsing.base import ParsedDocument, PdfParseError
 from ..parsing.factory import get_pdf_parser
 from ..session import get_session_store
-from . import celllines, literature, ontology, pride, spec_search, templates
-from .http import ToolHttpError, get_bytes
-from .publication_cache import cached_download
+from . import celllines, literature, ontology, pride, spec_search, templates, supplements
+from .http import ToolHttpError, get_bytes, get_text
+from .publication_cache import cached_download, SupplementDownloadError
 
 Handler = Callable[[dict[str, Any], str], Awaitable[Any]]
 
@@ -44,12 +48,16 @@ async def _find_publication(args: dict, _session: str) -> Any:
         use_fallback=args.get("useFallback", False)
     )
     for candidate in result.get("pdfCandidates", []):
-        if candidate.get("source") == "scihub":
-            get_session_store().remember_pdf_source(_session, candidate["url"], "scihub")
+        get_session_store().remember_pdf_source(_session, candidate["url"], candidate.get("source", "publication"),
+            {key: result[key] for key in ("doi", "pmid", "pmcid", "title") if result.get(key)})
+    abstract = (_store_abstract(result, _session) if result.get("status") not in {"identifier_conflict", "needs_confirmation"}
+                else {"status": "needs_confirmation"})
     # Discovery returns identifiers and acquisition routes, not article content
     # or the upstream search response. Keep license/version for PDF acquisition.
     fields = ("found", "status", "pmid", "pmcid", "doi", "title", "url", "fullTextAvailable", "fallbackAvailable", "fallbackAttempted")
     compact = {key: result[key] for key in fields if result.get(key) is not None and result.get(key) != ""}
+    compact["abstract"] = abstract
+    compact["supplements"] = {"status": "not_checked", "nextStep": "Call find_publication_supplements independently of XML availability."}
     if result.get("pdfCandidates"):
         compact["pdfCandidates"] = result["pdfCandidates"]
     elif result.get("pdfUrls"):
@@ -67,18 +75,166 @@ async def _find_publication(args: dict, _session: str) -> Any:
         compact["warnings"] = result["warnings"]
     if result.get("nextStep"):
         compact["nextStep"] = result["nextStep"].replace("pdfUrls", "pdfCandidates")
+    if result.get("found") and result.get("status") not in {"identifier_conflict", "needs_confirmation"}:
+        matching = []
+        for doc in get_session_store().list_for_session(_session):
+            if doc.metadata.get("evidenceKind") == "abstract":
+                continue
+            identifiers = {**doc.metadata, **(doc.metadata.get("identifiers") or {})}
+            pairs = [(key, result[key], identifiers[key]) for key in ("doi", "pmid", "pmcid")
+                     if result.get(key) and identifiers.get(key)]
+            def normalized(key, value):
+                return literature.normalize_doi(str(value)) if key == "doi" else str(value).strip().lower()
+            if pairs and all(normalized(key, left) == normalized(key, right) for key, left, right in pairs):
+                matching.append(doc.document_id)
+        if matching:
+            compact["sessionDocuments"] = [doc for doc in (await _list_documents({}, _session))["documents"]
+                                           if doc["documentId"] in matching]
+            compact["nextStep"] = ("Matching paper evidence is already parsed as a session document. "
+                                   "Use read_document with its documentId; follow nextReads for unread sections. "
+                                   "nextReads lists unread content, not mandatory blockers. Read passages needed for each proposed field. "
+                                   "fullTextAvailable describes Europe PMC XML only. Check evidenceKind: supplements and abstracts are not the full article. "
+                                   "Do not download again or request upload.")
+    compact["nextStep"] = compact.get("nextStep", "") + " Independently call find_publication_supplements for associated data, especially sample-design tables; XML failure does not mean supplements are unavailable."
     return compact
 
 
 def _document_result(stored, cached=False) -> dict:
     return {"ok": True, "status": "ready", "documentId": stored.document_id,
             "cached": cached, "parser": stored.document.parser,
+            "evidenceKind": stored.metadata.get("evidenceKind", "article"),
+            "readingStatus": stored.reading_status(),
             "fileName": stored.file_name, "url": stored.origin,
             "pmcid": stored.metadata.get("pmcid"), "title": stored.metadata.get("title"),
             "createdAt": stored.created_at,
             "charCount": stored.document.char_count,
-            "availableSections": list(stored.document.sections), "metadata": stored.metadata,
-            "nextStep": "Call read_document with this documentId (methods/results/tables)."}
+            "availableSections": list(stored.document.sections) or ["body"], "metadata": stored.metadata,
+            "nextReads": [{"documentId": stored.document_id, "sections": [name], "offset": offset}
+                          for name, offset in stored.unread_sections().items()],
+            "nextStep": "Call read_document with this documentId. Follow nextReads using the exact returned section names, including body/main text when present."}
+
+
+def _store_abstract(publication: dict, session_id: str) -> dict:
+    text = publication.get('abstract') or ''
+    if not text.strip():
+        return {'status': 'not_available', 'nextStep': 'Try get_publication_abstract with the PMID for a PubMed fallback.'}
+    store = get_session_store()
+    identifiers = {k: publication[k] for k in ('pmid', 'pmcid', 'doi', 'title') if publication.get(k)}
+    origin = publication.get('url') or f'https://pubmed.ncbi.nlm.nih.gov/{publication.get("pmid", "")}/'
+    for doc in store.list_for_session(session_id):
+        if doc.origin == origin and doc.metadata.get('evidenceKind') == 'abstract' and doc.document.markdown == text:
+            return {'status': 'ready', 'documentId': doc.document_id, 'evidenceKind': 'abstract', 'charCount': len(text)}
+    doc = store.add_document(session_id, 'publication-abstract.txt', ParsedDocument(text, {'abstract': text}, parser='publication-metadata'),
+                             origin=origin, metadata={**identifiers, 'evidenceKind': 'abstract'})
+    return {'status': 'ready', 'documentId': doc.document_id, 'evidenceKind': 'abstract', 'charCount': len(text),
+            'nextStep': 'Read the abstract with read_document. It is not full-text evidence.'}
+
+
+async def _get_abstract(args: dict, session_id: str) -> dict:
+    from bs4 import BeautifulSoup
+    pmid = str(args['pmid']).strip()
+    if not pmid.isdigit():
+        raise ToolHttpError('PMID must contain digits only.')
+    url = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi'
+    try:
+        xml = await get_text(url, params={'db': 'pubmed', 'id': pmid, 'retmode': 'xml'})
+    except ToolHttpError as error:
+        return {'ok': False, 'status': 'retrieval_failed', 'error': str(error)}
+    soup = BeautifulSoup(xml, 'xml')
+    article = next((a for a in soup.find_all('PubmedArticle') if a.find('PMID') and a.find('PMID').get_text(strip=True) == pmid), None)
+    if article is None:
+        return {'ok': False, 'status': 'not_found', 'error': 'PubMed did not return the requested PMID.'}
+    abstract = '\n\n'.join((p.get('Label', '') + ': ' if p.get('Label') else '') + p.get_text(' ', strip=True)
+                            for p in article.select('Abstract > AbstractText'))
+    title = article.find('ArticleTitle')
+    doi = article.find('ArticleId', {'IdType': 'doi'})
+    return _store_abstract({'pmid': pmid, 'doi': literature.normalize_doi(doi.get_text() if doi else ''),
+                            'title': title.get_text(' ', strip=True) if title else '', 'abstract': abstract,
+                            'url': f'https://pubmed.ncbi.nlm.nih.gov/{pmid}/'}, session_id)
+
+
+async def _find_supplements(args: dict, session_id: str) -> dict:
+    publication = await literature.lookup_publication(pmid=args.get('pmid'), doi=args.get('doi')) if args.get('pmid') or args.get('doi') else {}
+    if publication.get('status') in {'identifier_conflict', 'needs_confirmation'}:
+        return publication
+    identifiers = {key: publication[key] for key in ('doi', 'pmid', 'pmcid', 'title') if publication.get(key)}
+    result = await supplements.discover(publication)
+    if args.get('accession'):
+        try:
+            project = await supplements.discover_pride(args['accession'])
+            result['candidates'].extend(project['candidates'])
+            result['checks'].extend(project['checks'])
+            result['truncated'] = result.get('truncated', False) or project['truncated']
+        except ToolHttpError as error:
+            result['checks'].append({'source': 'pride', 'status': 'discovery_failed', 'error': str(error)})
+        result['status'] = 'found' if result['candidates'] else ('discovery_failed' if any(c['status'] == 'discovery_failed' for c in result['checks']) else 'not_found')
+    store = get_session_store()
+    for candidate in result['candidates']:
+        store.remember_pdf_source(session_id, candidate['url'], 'supplement',
+                                  {**(identifiers if candidate.get('source') != 'pride' else {'accession': candidate['accession']}), 'supplementCandidate': candidate, 'evidenceKind': 'supplement'})
+    return {**identifiers, **result, 'abstract': _store_abstract(publication, session_id),
+            'nextStep': 'Use get_publication_supplement with a returned URL. ZIPs list members first; select the sample-design table. If discovery/download fails, report the source and error, not that no supplements exist.'}
+
+
+async def _get_supplement(args: dict, session_id: str) -> dict:
+    url = args['url']
+    store = get_session_store()
+    identifiers = store.pdf_identifiers(session_id, url)
+    candidate = identifiers.pop('supplementCandidate', None)
+    if not candidate and args.get('userProvided'):
+        parsed_url = urlsplit(url)
+        if parsed_url.scheme not in {'http', 'https'} or not parsed_url.hostname or parsed_url.username or parsed_url.password:
+            return {'ok': False, 'status': 'invalid_url', 'error': 'Provide an HTTP(S) attachment URL without embedded credentials.'}
+        filename = args.get('fileName') or unquote(PurePosixPath(parsed_url.path).name)
+        if PurePosixPath(filename.lower()).suffix not in supplements.SUPPORTED | {'.zip'}:
+            return {'ok': False, 'status': 'unsupported_format', 'error': 'Provide fileName with the actual attachment extension.'}
+        candidate = {'url': url, 'fileName': filename, 'source': 'user-link'}
+        identifiers = {'evidenceKind': 'supplement'}
+        store.remember_pdf_source(session_id, url, 'supplement', {**identifiers, 'supplementCandidate': candidate})
+    if not candidate or identifiers.get('evidenceKind') != 'supplement':
+        return {'ok': False, 'status': 'not_discovered', 'error': 'Call find_publication_supplements first and use a returned URL.'}
+    member = args.get('member')
+    for doc in store.list_for_session(session_id):
+        if doc.origin == url and doc.metadata.get('evidenceKind') == 'supplement' and doc.metadata.get('archiveMember') == member:
+            return _document_result(doc, True)
+    try:
+        data, path = await cached_download(url, 'supplement')
+    except ToolHttpError as error:
+        return {'ok': False, 'status': 'download_failed', 'url': url, 'error': str(error),
+                'reason': error.reason if isinstance(error, SupplementDownloadError) else 'request_failed',
+                'source': candidate.get('source'),
+                'nextStep': 'Do not retry this failed URL in this acquisition attempt. Try other already-discovered relevant attachments, '
+                            'preferring publisher originals, then NCBI converted supplementary text or matching PRIDE project tables. '
+                            'If discovery has not covered these sources, call find_publication_supplements with the known PMID/DOI '
+                            'and current accession. Verify publication/project identity before using an alternative; converted text '
+                            'may lose table formatting. If all relevant alternatives fail, ask the user to download the attachment '
+                            'in a browser, complete any browser verification, and upload it. Report download failure, not absence '
+                            'of supplements. Preserve the abstract and other documents; leave unsupported fields unresolved.'}
+    filename = candidate['fileName']
+    try:
+        if filename.lower().endswith('.zip'):
+            members = supplements.archive_members(data)
+            if not member:
+                return {'ok': True, 'status': 'downloaded', 'url': url, 'members': members,
+                        'nextStep': 'Call get_publication_supplement again with the exact member name, prioritizing Table 1/sample design. Nothing has been parsed yet.'}
+            selected = next((item for item in members if item['fileName'] == member), None)
+            if not selected or not selected['supported']:
+                raise PdfParseError('Select a supported member returned in the ZIP listing.')
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                data = archive.read(member)
+            filename = member
+        elif member:
+            raise PdfParseError('member is only supported for ZIP archives.')
+        document = await supplements.parse_attachment(data, filename, candidate.get('source', ''))
+    except Exception as error:
+        return {'ok': False, 'status': 'parse_failed', 'url': url, 'error': str(error),
+                'nextStep': 'The original attachment is cached. Try another supported member or provide a smaller readable table.'}
+    doc = store.add_document(session_id, filename, document, origin=url,
+                             metadata={**identifiers, 'archiveMember': member, 'rawPath': path,
+                                       'source': candidate.get('source'), 'sha256': hashlib.sha256(data).hexdigest()})
+    result = _document_result(doc)
+    result['nextStep'] = 'Read this supplementary document using nextReads. Cite its filename, sheet/section and row numbers. It only supports fields explicitly documented, not unknown sample counts.'
+    return result
 
 
 async def _get_full_text(args: dict, session_id: str) -> Any:
@@ -87,7 +243,7 @@ async def _get_full_text(args: dict, session_id: str) -> Any:
         pmcid = "PMC" + pmcid
     store = get_session_store()
     for stored in store.list_for_session(session_id):
-        if stored.metadata.get("pmcid") == pmcid:
+        if stored.metadata.get("pmcid") == pmcid and stored.metadata.get("evidenceKind") not in {"abstract", "supplement"}:
             return _document_result(stored, True)
     try:
         result = await literature.fetch_full_text(pmcid)
@@ -141,17 +297,26 @@ async def _get_template_columns(args: dict, _session: str) -> Any:
 
 async def _validate_templates(args: dict, _session: str) -> Any:
     return await templates.validate_combination(
-        args.get("technology"), args.get("sample"), args.get("experiments") or []
+        args.get("technology"), args.get("sample"), args.get("experiments") or [], args.get("sampleMetadataTemplates") or []
     )
 
 
 async def _parse_pdf_url(args: dict, session_id: str) -> Any:
     url = args["url"]
-    doi = literature.normalize_doi(args.get("doi"))
     store = get_session_store()
+    identifiers = store.pdf_identifiers(session_id, url)
+    doi = literature.normalize_doi(identifiers.get("doi") or args.get("doi"))
+    if identifiers.get("doi") and args.get("doi") and doi != literature.normalize_doi(args["doi"]):
+        return {"ok": False, "status": "identifier_conflict", "error": "The supplied DOI conflicts with this discovered PDF. Use its original publication identifiers."}
     for stored in store.list_for_session(session_id):
+        if stored.metadata.get("evidenceKind") in {"abstract", "supplement"}:
+            continue
         if stored.origin == url or (doi and stored.metadata.get("doi") == doi
                                     and stored.metadata.get("version") == args.get("version")):
+            if stored.origin == url:
+                for key, value in identifiers.items():
+                    if not stored.metadata.get(key):
+                        stored.metadata[key] = value
             return _document_result(stored, True)
     try:
         data, path = await cached_download(url, "pdf", trust_env=_pdf_trust_env(session_id, url))
@@ -166,9 +331,9 @@ async def _parse_pdf_url(args: dict, session_id: str) -> Any:
         return {"ok": False, "status": "parse_failed", "error": str(error), "rawPath": path,
                 "nextStep": "The PDF is cached. Retry parsing after fixing the parser or try another candidate."}
     stored = store.add_document(session_id, "paper.pdf", document, origin=url,
-        metadata={"source": url, "format": "pdf", "rawPath": path,
+        metadata={**identifiers, "source": url, "format": "pdf", "rawPath": path,
                   "sha256": hashlib.sha256(data).hexdigest(), "doi": doi or None,
-                  "pmid": args.get("pmid"), "license": args.get("license"), "version": args.get("version")})
+                  "pmid": identifiers.get("pmid") or args.get("pmid"), "license": args.get("license"), "version": args.get("version")})
     return _document_result(stored)
 
 
@@ -195,6 +360,9 @@ async def _list_documents(_args: dict, session_id: str) -> Any:
                 "fileName": d.file_name,
                 **({"title": d.metadata["title"]} if d.metadata.get("title") else {}),
                 "availableSections": list(d.document.sections) or ["body"],
+                "identifiers": {key: d.metadata[key] for key in ("doi", "pmid", "pmcid") if d.metadata.get(key)},
+                "nextReads": [{"documentId": d.document_id, "sections": [name], "offset": offset}
+                              for name, offset in d.unread_sections().items()],
             }
             for d in stored
         ]
@@ -264,6 +432,8 @@ async def _read_document(args: dict, session_id: str) -> Any:
     while len(json.dumps(result, ensure_ascii=False)) > MAX_RESULT_CHARS and limit > 1:
         limit = max(1, limit // 2)
         result = page(limit)
+    get_session_store().record_document_read(session_id, stored.document_id, result["sectionInfo"])
+    result["evidenceKind"] = stored.metadata.get("evidenceKind", "article")
     return result
 
 
@@ -489,6 +659,26 @@ TOOLS: list[dict[str, Any]] = [
         "status": "Looking up the publication",
         "title": "Publication lookup",
         "summarize": _summarize_publication,
+    },
+    {
+        "declaration": {"name": "get_publication_abstract",
+            "description": "Fetch a PMID abstract from PubMed independently of full-text XML. Returns a session document explicitly labelled abstract, not a full paper.",
+            "parameters": {"type": "object", "properties": {"pmid": {"type": "string"}}, "required": ["pmid"]}},
+        "handler": _get_abstract, "status": "Retrieving PubMed abstract", "title": "Publication abstract", "summarize": _summarize_full_text,
+    },
+    {
+        "declaration": {"name": "find_publication_supplements",
+            "description": "Discover supplementary files independently of XML/PDF availability via publisher, PMC, NCBI and optional PRIDE accession. Project files are candidates, not automatically paper supplements. Call even when fullTextAvailable=false. Returns source-specific statuses and real attachment URLs. Use before declaring sample design unavailable.",
+            "parameters": {"type": "object", "properties": {"pmid": {"type": "string"}, "doi": {"type": "string"}, "accession": {"type": "string"}}}},
+        "handler": _find_supplements, "status": "Finding supplementary materials", "title": "Supplement discovery",
+        "summarize": lambda r: f"{r.get('status', 'unknown')}: {len(r.get('candidates', []))} supplementary links",
+    },
+    {
+        "declaration": {"name": "get_publication_supplement",
+            "description": "Download a discovered attachment; ZIPs return a member listing, select member to parse. PDFs use MinerU, spreadsheets preserve sheet and row references, text/Word are parsed into session documents. Read returned documentId/nextReads for actual evidence. Use discovered URLs or actual user-supplied direct URLs with userProvided=true. Never invent URLs. User links have unverified paper identity.",
+            "parameters": {"type": "object", "properties": {"url": {"type": "string"}, "userProvided": {"type": "boolean", "description": "True only for an attachment URL explicitly supplied by the user."}, "fileName": {"type": "string", "description": "Actual filename with extension for extensionless URLs."}, "member": {"type": "string", "description": "Exact ZIP member from the listing; omit to list archive."}}, "required": ["url"]}},
+        "handler": _get_supplement, "status": "Downloading and parsing supplementary material", "title": "Supplementary document",
+        "summarize": lambda r: f"{r.get('status', 'unknown')}: {r.get('fileName') or r.get('error') or str(len(r.get('members', []))) + ' archive members'}",
     },
     {
         "declaration": {
@@ -746,13 +936,14 @@ TOOLS: list[dict[str, Any]] = [
     {
         "declaration": {
             "name": "validate_template_combination",
-            "description": "Validate a technology + sample + experiment template combination.",
+            "description": "Validate a template combination using the wizard snapshot and inherited rules.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "technology": {"type": "string"},
                     "sample": {"type": ["string", "null"], "description": "Optional sample template; null for generic samples without a specialized template."},
                     "experiments": {"type": "array", "items": {"type": "string"}},
+                    "sampleMetadataTemplates": {"type": "array", "items": {"type": "string"}, "description": "Additional compatible sample-layer templates."},
                 },
             },
         },

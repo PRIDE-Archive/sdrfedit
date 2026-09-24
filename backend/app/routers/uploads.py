@@ -1,9 +1,11 @@
-"""Document intake: user-supplied PDFs (paywalled papers) and pasted text."""
+"""Document intake: papers, supplementary attachments and pasted text."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
+from pathlib import PurePosixPath
+from ..tools.supplements import SUPPORTED, parse_uploaded_attachment
 from ..config import get_settings
 from ..parsing.base import ParsedDocument, PdfParseError, split_markdown_sections
 from ..parsing.factory import get_pdf_parser
@@ -13,29 +15,33 @@ from ..session import get_session_store
 router = APIRouter(prefix="/api/uploads", tags=["uploads"])
 
 
+@router.post("/document", response_model=UploadResult)
 @router.post("/pdf", response_model=UploadResult)
 async def upload_pdf(
     sessionId: str = Form(...),
     file: UploadFile = File(...),
 ) -> UploadResult:
-    """Parse an uploaded paper so the assistant can read its methods section."""
+    """Parse a supported uploaded document into readable session sections."""
     settings = get_settings()
-    data = await file.read()
+    data = await file.read(settings.max_upload_mb * 1024 * 1024 + 1)
 
     if not data:
         raise HTTPException(status_code=400, detail="The uploaded file was empty.")
     limit = settings.max_upload_mb * 1024 * 1024
     if len(data) > limit:
         raise HTTPException(status_code=413, detail=f"File exceeds the {settings.max_upload_mb} MB limit.")
-    if data[:5] != b"%PDF-":
-        raise HTTPException(status_code=415, detail="Only PDF files are accepted here; paste plain text instead.")
+    if PurePosixPath((file.filename or "").lower()).suffix not in SUPPORTED | {".zip"}:
+        raise HTTPException(status_code=415, detail="Supported formats: PDF, XLSX, XLS, CSV, TSV, TXT, DOCX, ZIP.")
 
     try:
-        document = await get_pdf_parser().parse_bytes(data, file.filename or "paper.pdf")
-    except PdfParseError as error:
+        document = (await get_pdf_parser().parse_bytes(data, file.filename or "paper.pdf")
+                    if data.startswith(b"%PDF-") else
+                    await parse_uploaded_attachment(data, file.filename or "paper.pdf"))
+    except Exception as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
-    stored = get_session_store().add_document(sessionId, file.filename or "paper.pdf", document, origin="upload")
+    stored = get_session_store().add_document(sessionId, file.filename or "paper.pdf", document, origin="upload",
+        metadata={"evidenceKind": "article" if data.startswith(b"%PDF-") else "supplement"})
     return UploadResult(
         documentId=stored.document_id,
         fileName=stored.file_name,

@@ -3,12 +3,44 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import tempfile
 import time
 from pathlib import Path
 
 from ..config import get_settings
 from .http import ToolHttpError, get_bytes
+
+
+class SupplementDownloadError(ToolHttpError):
+    """A non-attachment response with a machine-readable recovery reason."""
+
+    def __init__(self, reason: str, message: str):
+        super().__init__(message)
+        self.reason = reason
+
+
+def validate_supplement_response(data: bytes, content_type: str) -> None:
+    # Inspect a bounded prefix, including HTML behind a BOM, comment or XML
+    # declaration. Content-Type alone is not reliable for binary attachments.
+    prefix = data[:65536].decode('utf-8-sig', errors='replace').lower()
+    is_html = ('html' in content_type.lower()
+               or re.search(r'<(?:!doctype\s+html|html|head|body)\b', prefix))
+    if not is_html:
+        return
+    challenge = any(marker in prefix for marker in (
+        'recaptcha', 'checking your browser', 'verify you are human',
+        'cf-chl-', 'challenge-platform',
+    ))
+    if challenge:
+        raise SupplementDownloadError(
+            'browser_verification_required',
+            'The supplement server returned a browser verification page, not an attachment. '
+            'Try another discovered source, or download the file in a browser and upload it.')
+    raise SupplementDownloadError(
+        'html_response',
+        'Supplement download returned an HTML page, not an attachment. '
+        'The link may lead to a login, error or landing page.')
 
 
 def cache_root() -> Path:
@@ -19,7 +51,7 @@ def cache_root() -> Path:
 
 
 async def cached_download(url: str, kind: str, *, trust_env: bool = True) -> tuple[bytes, str]:
-    if kind not in {"pdf", "xml"}:
+    if kind not in {"pdf", "xml", "supplement"}:
         raise ValueError("Unsupported article format")
     root = cache_root()
     settings = get_settings()
@@ -34,8 +66,10 @@ async def cached_download(url: str, kind: str, *, trust_env: bool = True) -> tup
     path = root / (hashlib.sha256(f"{kind}:{url}".encode()).hexdigest() + ".raw")
     if path.exists():
         return path.read_bytes(), str(path)
-    data, _ = await get_bytes(url, trust_env=trust_env,
+    data, content_type = await get_bytes(url, trust_env=trust_env,
                              max_bytes=min(settings.max_upload_mb, settings.publication_cache_max_mb) * 1024 * 1024)
+    if kind == "supplement":
+        validate_supplement_response(data, content_type)
     if kind == "pdf" and not data.startswith(b"%PDF-"):
         raise ToolHttpError("Downloaded response is not a PDF (possibly a login or error page).")
     if kind == "xml":

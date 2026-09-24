@@ -125,7 +125,7 @@ async def lookup_publication(pmid: str | None = None, doi: str | None = None, ti
         "pmcid": pmcid, "doi": resolved_doi, "title": _clean(record.get("title")),
         "journal": ((record.get("journalInfo") or {}).get("journal") or {}).get("title"),
         "year": record.get("pubYear"), "isOpenAccess": record.get("isOpenAccess") == "Y",
-        "fullTextAvailable": open_full_text, "abstract": _clean(record.get("abstractText"))[:4000],
+        "fullTextAvailable": open_full_text, "abstract": _clean(record.get("abstractText")),
         "pdfUrls": [c["url"] for c in candidates], "pdfCandidates": candidates, "warnings": warnings,
         "url": f"https://doi.org/{resolved_doi}" if resolved_doi else f"https://europepmc.org/article/MED/{pmid}",
         "fallbackAvailable": fallback_available and not use_fallback,

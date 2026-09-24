@@ -100,6 +100,23 @@ function suggestionToTerm(s: OntologySuggestion): OntologyTerm {
         }
       </section>
 
+      @if (optionalColumns().length) {
+        <section class="column-section">
+          <button type="button" class="section-toggle" (click)="showOptional.set(!showOptional())"
+            [attr.aria-expanded]="showOptional()">
+            <span class="badge optional">Optional</span>
+            <span class="count">{{ optionalColumns().length }}</span>
+            <span class="chevron">{{ showOptional() ? '−' : '+' }}</span>
+          </button>
+          @if (showOptional()) {
+            <p class="step-description">Fill the fields relevant to your study. Empty optional fields are omitted.</p>
+            @for (col of optionalColumns(); track col.name) {
+              <ng-container *ngTemplateOutlet="fieldTpl; context: { $implicit: col, required: false }" />
+            }
+          }
+        </section>
+      }
+
       <wizard-factor-values />
 
       @if (!wizardState.isStep2Valid()) {
@@ -207,6 +224,7 @@ function suggestionToTerm(s: OntologySuggestion): OntologyTerm {
     }
     .badge.required { background: #fee2e2; color: #991b1b; }
     .badge.recommended { background: #ffedd5; color: #9a3412; }
+    .badge.optional { background: #e0e7ff; color: #3730a3; }
     .count { color: #9ca3af; font-weight: 500; }
     .form-section { margin-bottom: 14px; padding: 12px; border: 1px solid #f3f4f6; border-radius: 10px; background: #fff; }
     .form-label { display: block; font-size: 13px; font-weight: 600; color: #111827; margin-bottom: 6px; }
@@ -269,6 +287,12 @@ export class SampleCharacteristicsComponent implements OnInit {
   readonly showRecommended = signal(false);
 
   readonly activeColumn = signal<string | null>(null);
+  readonly showOptional = signal(false);
+  readonly optionalColumns = computed(() =>
+    (this.state().characteristicColumns || []).filter(c =>
+      c.requirement === 'optional' && !isWizardSkippedCharacteristic(c.name)
+        && getSpecialtyCharacteristicKey(c.name) !== 'material type')
+  );
   readonly searchResults = signal<OntologyTerm[]>([]);
   private readonly searchMap = signal<Record<string, string>>({});
 

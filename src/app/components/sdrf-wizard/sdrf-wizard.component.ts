@@ -483,13 +483,15 @@ export class SdrfWizardComponent implements OnInit {
   private readonly chatHistory = inject(ChatHistoryService);
 
   constructor() {
-    // Reset wizard state when component is created
+    // Creating a new SDRF must not implicitly restore the previous chat's draft.
+    // Historical drafts remain available through explicit chat-history selection.
+    this.chatHistory.create();
     this.wizardState.reset();
   }
 
   ngOnInit(): void {
     // Fetch templates when wizard opens
-    this.templateService.fetchTemplates();
+    // Step 1 revalidates the catalogue; later steps restore the draft snapshot.
   }
 
   goToStep(step: number): void {

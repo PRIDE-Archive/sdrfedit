@@ -13,8 +13,7 @@ const PRIDE_API_BASE = 'https://www.ebi.ac.uk/pride/ws/archive/v3';
 
 const RAW_CATEGORY = 'RAW';
 /** Instrument raw dumps commonly deposited as RAW in PRIDE. */
-const RAW_NAME_RE = /\.(raw|wiff|wiff\.scan)(\.gz)?$/i;
-const RAW_DIR_RE = /\.d(\.zip|\.tar(\.gz)?)?$/i;
+const RAW_NAME_RE = /\.(raw|wiff|wiff2|d|baf|lcd|qgd)(\.tar\.gz|\.tar|\.zip|\.gz)?$/i;
 
 export function normalizePxdAccession(input: string): string {
   const trimmed = (input || '').trim().toUpperCase();
@@ -32,6 +31,7 @@ export function isValidPxdAccession(accession: string): boolean {
 
 function categoryValue(file: Record<string, unknown>): string {
   const cat = file['fileCategory'];
+  if (typeof cat === 'string') return cat;
   if (cat && typeof cat === 'object' && cat !== null && 'value' in cat) {
     return String((cat as { value?: string }).value || '');
   }
@@ -39,8 +39,10 @@ function categoryValue(file: Record<string, unknown>): string {
 }
 
 function isLikelyRawFile(fileName: string, category: string): boolean {
-  if (category.toUpperCase() === RAW_CATEGORY) return true;
-  return RAW_NAME_RE.test(fileName) || RAW_DIR_RE.test(fileName);
+  const normalizedCategory = category.trim().toUpperCase();
+  if (normalizedCategory) return normalizedCategory === RAW_CATEGORY;
+  // Match the backend: infer instrument formats only when classification is absent.
+  return RAW_NAME_RE.test(fileName);
 }
 
 /**
