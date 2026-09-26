@@ -1,0 +1,648 @@
+{
+  "source": "PXD001574 2026-09-25 historical failed Runs & Files batch; metadata reduced for regression testing",
+  "state": {
+    "sampleCount": 2,
+    "samples": [
+      {
+        "index": 1,
+        "sourceName": "HeLa_control",
+        "biologicalReplicate": 1,
+        "factorValues": {},
+        "characteristicValues": {
+          "characteristics[organism]": "Homo sapiens",
+          "characteristics[organism part]": "cell culture",
+          "characteristics[disease]": "cervical carcinoma",
+          "characteristics[cell line]": "HeLa",
+          "characteristics[cellosaurus accession]": "CVCL_0030",
+          "characteristics[cellosaurus name]": "HeLa",
+          "characteristics[cell type]": "epithelial cell",
+          "characteristics[age]": "30Y",
+          "characteristics[ancestry category]": "African American",
+          "characteristics[culture medium]": "Dulbecco's Modified Eagle Medium",
+          "characteristics[treatment]": "not applicable",
+          "characteristics[sex]": "female"
+        }
+      },
+      {
+        "index": 2,
+        "sourceName": "HeLa_EGF",
+        "biologicalReplicate": 1,
+        "factorValues": {},
+        "characteristicValues": {
+          "characteristics[organism]": "Homo sapiens",
+          "characteristics[organism part]": "cell culture",
+          "characteristics[disease]": "cervical carcinoma",
+          "characteristics[cell line]": "HeLa",
+          "characteristics[cellosaurus accession]": "CVCL_0030",
+          "characteristics[cellosaurus name]": "HeLa",
+          "characteristics[cell type]": "epithelial cell",
+          "characteristics[age]": "30Y",
+          "characteristics[ancestry category]": "African American",
+          "characteristics[culture medium]": "Dulbecco's Modified Eagle Medium",
+          "characteristics[treatment]": "epidermal growth factor",
+          "characteristics[sex]": "female"
+        }
+      }
+    ],
+    "factors": [
+      {
+        "name": "treatment",
+        "enabled": true,
+        "values": [],
+        "scope": "sample",
+        "sourceCharacteristic": "characteristics[treatment]",
+        "reasoning": "The experiment compares non-stimulated and EGF-stimulated HeLa cells: PRIDE description ('Comparison ... of control and EGF-stimulated HeLa cells', 'EGF-stimulated HeLa cells') and the paper's labeling section (control halves labelled 114/115, EGF-stimulated halves labelled 116/117) and its comparative results section on EGF-stimulated vs non-stimulated HeLa cells. Values are derived from characteristics[treatment], so this linked factor needs no independent assignments."
+      },
+      {
+        "name": "instrument",
+        "enabled": true,
+        "values": [
+          "Q Exactive",
+          "TripleTOF 5600",
+          "Synapt G2-Si"
+        ],
+        "scope": "run",
+        "reasoning": "Technical dimension deliberately studied at run level: PRIDE metadata states the technique was validated on three instrument platforms (Q Exactive MS:1001911, TripleTOF 5600 MS:1000932, Synapt MS:1001782), and the raw file names group every acquisition by platform (InGelPiTRAQ[QExactive|TripleTOF5600|SynaptG2Si]*, InSolutionPiTRAQ[QExactive|SynaptG2Si|TripleTOF5600]). Candidate values come from the file names and PRIDE instrument list; per-run values are assigned on Runs & Files."
+      }
+    ],
+    "msRuns": [
+      {
+        "id": "run_muhcal47_kuh4p",
+        "name": "Run 1",
+        "labelConfigId": "lf",
+        "sampleIndices": [
+          1
+        ],
+        "channels": [
+          {
+            "label": "label free sample",
+            "role": "sample",
+            "sampleIndex": 1,
+            "mappingId": "c2402e92-93f9-45b0-9eaa-6ff07ac38da5"
+          }
+        ],
+        "sampleMappingMode": "rows"
+      }
+    ],
+    "dataFiles": [],
+    "labelConfigId": "lf"
+  },
+  "actions": [
+    {
+      "step": "runs-files",
+      "op": "setLabelConfig",
+      "args": [
+        "itraq4plex"
+      ],
+      "label": "Label configuration: iTRAQ 4-plex (reporters 114-117)"
+    },
+    {
+      "step": "runs-files",
+      "op": "setHasFractions",
+      "args": [
+        true
+      ],
+      "label": "Fractions: yes (1D-PAGE molecular weight fractions)"
+    },
+    {
+      "step": "runs-files",
+      "op": "setFractionCount",
+      "args": [
+        4
+      ],
+      "label": "Fraction count: 4"
+    },
+    {
+      "step": "runs-files",
+      "op": "replaceWithUnassignedFileNames",
+      "args": [
+        [
+          "InGelPiTRAQQExactive_MW1.raw",
+          "InGelPiTRAQQExactive_MW2.raw",
+          "InGelPiTRAQQExactive_MW3.raw",
+          "InGelPiTRAQQExactive_MW4.raw",
+          "InGelPiTRAQSynaptG2Si_MW1.raw.zip",
+          "InGelPiTRAQSynaptG2Si_MW2.raw.zip",
+          "InGelPiTRAQSynaptG2Si_MW3.raw.zip",
+          "InGelPiTRAQSynaptG2Si_MW4.raw.zip",
+          "InGelPiTRAQTripleTOF5600_MW1.wiff",
+          "InGelPiTRAQTripleTOF5600_MW2.wiff",
+          "InGelPiTRAQTripleTOF5600_MW3.wiff",
+          "InGelPiTRAQTripleTOF5600_MW4.wiff",
+          "InSolutionPiTRAQQExactive.raw",
+          "InSolutionPiTRAQSynaptG2Si.raw.zip",
+          "InSolutionPiTRAQTripleTOF5600.wiff"
+        ],
+        {
+          "InGelPiTRAQQExactive_MW1.raw": "ftp://ftp.pride.ebi.ac.uk/pride/data/archive/2015/01/PXD001574/InGelPiTRAQQExactive_MW1.raw",
+          "InGelPiTRAQQExactive_MW2.raw": "ftp://ftp.pride.ebi.ac.uk/pride/data/archive/2015/01/PXD001574/InGelPiTRAQQExactive_MW2.raw",
+          "InGelPiTRAQQExactive_MW3.raw": "ftp://ftp.pride.ebi.ac.uk/pride/data/archive/2015/01/PXD001574/InGelPiTRAQQExactive_MW3.raw",
+          "InGelPiTRAQQExactive_MW4.raw": "ftp://ftp.pride.ebi.ac.uk/pride/data/archive/2015/01/PXD001574/InGelPiTRAQQExactive_MW4.raw",
+          "InGelPiTRAQSynaptG2Si_MW1.raw.zip": "ftp://ftp.pride.ebi.ac.uk/pride/data/archive/2015/01/PXD001574/InGelPiTRAQSynaptG2Si_MW1.raw.zip",
+          "InGelPiTRAQSynaptG2Si_MW2.raw.zip": "ftp://ftp.pride.ebi.ac.uk/pride/data/archive/2015/01/PXD001574/InGelPiTRAQSynaptG2Si_MW2.raw.zip",
+          "InGelPiTRAQSynaptG2Si_MW3.raw.zip": "ftp://ftp.pride.ebi.ac.uk/pride/data/archive/2015/01/PXD001574/InGelPiTRAQSynaptG2Si_MW3.raw.zip",
+          "InGelPiTRAQSynaptG2Si_MW4.raw.zip": "ftp://ftp.pride.ebi.ac.uk/pride/data/archive/2015/01/PXD001574/InGelPiTRAQSynaptG2Si_MW4.raw.zip",
+          "InGelPiTRAQTripleTOF5600_MW1.wiff": "ftp://ftp.pride.ebi.ac.uk/pride/data/archive/2015/01/PXD001574/InGelPiTRAQTripleTOF5600_MW1.wiff",
+          "InGelPiTRAQTripleTOF5600_MW2.wiff": "ftp://ftp.pride.ebi.ac.uk/pride/data/archive/2015/01/PXD001574/InGelPiTRAQTripleTOF5600_MW2.wiff",
+          "InGelPiTRAQTripleTOF5600_MW3.wiff": "ftp://ftp.pride.ebi.ac.uk/pride/data/archive/2015/01/PXD001574/InGelPiTRAQTripleTOF5600_MW3.wiff",
+          "InGelPiTRAQTripleTOF5600_MW4.wiff": "ftp://ftp.pride.ebi.ac.uk/pride/data/archive/2015/01/PXD001574/InGelPiTRAQTripleTOF5600_MW4.wiff",
+          "InSolutionPiTRAQQExactive.raw": "ftp://ftp.pride.ebi.ac.uk/pride/data/archive/2015/01/PXD001574/InSolutionPiTRAQQExactive.raw",
+          "InSolutionPiTRAQSynaptG2Si.raw.zip": "ftp://ftp.pride.ebi.ac.uk/pride/data/archive/2015/01/PXD001574/InSolutionPiTRAQSynaptG2Si.raw.zip",
+          "InSolutionPiTRAQTripleTOF5600.wiff": "ftp://ftp.pride.ebi.ac.uk/pride/data/archive/2015/01/PXD001574/InSolutionPiTRAQTripleTOF5600.wiff"
+        }
+      ],
+      "label": "Import 15 primary raw file names from PRIDE (PXD001574)"
+    },
+    {
+      "step": "runs-files",
+      "op": "applyRunsFilesPlan",
+      "args": [
+        {
+          "groups": [
+            {
+              "name": "InSolutionPiTRAQQExactive",
+              "labelConfigId": "itraq4plex",
+              "channels": [
+                {
+                  "label": "iTRAQ114",
+                  "sourceName": "HeLa_control"
+                },
+                {
+                  "label": "iTRAQ115",
+                  "sourceName": "HeLa_control"
+                },
+                {
+                  "label": "iTRAQ116",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ117",
+                  "sourceName": "HeLa_EGF"
+                }
+              ],
+              "factorValues": {
+                "instrument": "Q Exactive"
+              },
+              "files": [
+                {
+                  "fileName": "InSolutionPiTRAQQExactive.raw",
+                  "fractionId": 1,
+                  "technicalReplicate": 1
+                }
+              ]
+            },
+            {
+              "name": "InSolutionPiTRAQTripleTOF5600",
+              "labelConfigId": "itraq4plex",
+              "channels": [
+                {
+                  "label": "iTRAQ114",
+                  "sourceName": "HeLa_control"
+                },
+                {
+                  "label": "iTRAQ115",
+                  "sourceName": "HeLa_control"
+                },
+                {
+                  "label": "iTRAQ116",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ117",
+                  "sourceName": "HeLa_EGF"
+                }
+              ],
+              "factorValues": {
+                "instrument": "TripleTOF 5600"
+              },
+              "files": [
+                {
+                  "fileName": "InSolutionPiTRAQTripleTOF5600.wiff",
+                  "fractionId": 1,
+                  "technicalReplicate": 1
+                }
+              ]
+            },
+            {
+              "name": "InSolutionPiTRAQSynaptG2Si",
+              "labelConfigId": "itraq4plex",
+              "channels": [
+                {
+                  "label": "iTRAQ114",
+                  "sourceName": "HeLa_control"
+                },
+                {
+                  "label": "iTRAQ115",
+                  "sourceName": "HeLa_control"
+                },
+                {
+                  "label": "iTRAQ116",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ117",
+                  "sourceName": "HeLa_EGF"
+                }
+              ],
+              "factorValues": {
+                "instrument": "Synapt G2-Si"
+              },
+              "files": [
+                {
+                  "fileName": "InSolutionPiTRAQSynaptG2Si.raw.zip",
+                  "fractionId": 1,
+                  "technicalReplicate": 1
+                }
+              ]
+            },
+            {
+              "name": "InGelPiTRAQQExactive_MW1",
+              "labelConfigId": "itraq4plex",
+              "channels": [
+                {
+                  "label": "iTRAQ114",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ115",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ116",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ117",
+                  "sourceName": "HeLa_EGF"
+                }
+              ],
+              "factorValues": {
+                "instrument": "Q Exactive"
+              },
+              "files": [
+                {
+                  "fileName": "InGelPiTRAQQExactive_MW1.raw",
+                  "fractionId": 1,
+                  "technicalReplicate": 1
+                }
+              ]
+            },
+            {
+              "name": "InGelPiTRAQQExactive_MW2",
+              "labelConfigId": "itraq4plex",
+              "channels": [
+                {
+                  "label": "iTRAQ114",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ115",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ116",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ117",
+                  "sourceName": "HeLa_EGF"
+                }
+              ],
+              "factorValues": {
+                "instrument": "Q Exactive"
+              },
+              "files": [
+                {
+                  "fileName": "InGelPiTRAQQExactive_MW2.raw",
+                  "fractionId": 2,
+                  "technicalReplicate": 1
+                }
+              ]
+            },
+            {
+              "name": "InGelPiTRAQQExactive_MW3",
+              "labelConfigId": "itraq4plex",
+              "channels": [
+                {
+                  "label": "iTRAQ114",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ115",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ116",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ117",
+                  "sourceName": "HeLa_EGF"
+                }
+              ],
+              "factorValues": {
+                "instrument": "Q Exactive"
+              },
+              "files": [
+                {
+                  "fileName": "InGelPiTRAQQExactive_MW3.raw",
+                  "fractionId": 3,
+                  "technicalReplicate": 1
+                }
+              ]
+            },
+            {
+              "name": "InGelPiTRAQQExactive_MW4",
+              "labelConfigId": "itraq4plex",
+              "channels": [
+                {
+                  "label": "iTRAQ114",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ115",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ116",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ117",
+                  "sourceName": "HeLa_EGF"
+                }
+              ],
+              "factorValues": {
+                "instrument": "Q Exactive"
+              },
+              "files": [
+                {
+                  "fileName": "InGelPiTRAQQExactive_MW4.raw",
+                  "fractionId": 4,
+                  "technicalReplicate": 1
+                }
+              ]
+            },
+            {
+              "name": "InGelPiTRAQTripleTOF5600_MW1",
+              "labelConfigId": "itraq4plex",
+              "channels": [
+                {
+                  "label": "iTRAQ114",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ115",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ116",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ117",
+                  "sourceName": "HeLa_EGF"
+                }
+              ],
+              "factorValues": {
+                "instrument": "TripleTOF 5600"
+              },
+              "files": [
+                {
+                  "fileName": "InGelPiTRAQTripleTOF5600_MW1.wiff",
+                  "fractionId": 1,
+                  "technicalReplicate": 1
+                }
+              ]
+            },
+            {
+              "name": "InGelPiTRAQTripleTOF5600_MW2",
+              "labelConfigId": "itraq4plex",
+              "channels": [
+                {
+                  "label": "iTRAQ114",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ115",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ116",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ117",
+                  "sourceName": "HeLa_EGF"
+                }
+              ],
+              "factorValues": {
+                "instrument": "TripleTOF 5600"
+              },
+              "files": [
+                {
+                  "fileName": "InGelPiTRAQTripleTOF5600_MW2.wiff",
+                  "fractionId": 2,
+                  "technicalReplicate": 1
+                }
+              ]
+            },
+            {
+              "name": "InGelPiTRAQTripleTOF5600_MW3",
+              "labelConfigId": "itraq4plex",
+              "channels": [
+                {
+                  "label": "iTRAQ114",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ115",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ116",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ117",
+                  "sourceName": "HeLa_EGF"
+                }
+              ],
+              "factorValues": {
+                "instrument": "TripleTOF 5600"
+              },
+              "files": [
+                {
+                  "fileName": "InGelPiTRAQTripleTOF5600_MW3.wiff",
+                  "fractionId": 3,
+                  "technicalReplicate": 1
+                }
+              ]
+            },
+            {
+              "name": "InGelPiTRAQTripleTOF5600_MW4",
+              "labelConfigId": "itraq4plex",
+              "channels": [
+                {
+                  "label": "iTRAQ114",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ115",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ116",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ117",
+                  "sourceName": "HeLa_EGF"
+                }
+              ],
+              "factorValues": {
+                "instrument": "TripleTOF 5600"
+              },
+              "files": [
+                {
+                  "fileName": "InGelPiTRAQTripleTOF5600_MW4.wiff",
+                  "fractionId": 4,
+                  "technicalReplicate": 1
+                }
+              ]
+            },
+            {
+              "name": "InGelPiTRAQSynaptG2Si_MW1",
+              "labelConfigId": "itraq4plex",
+              "channels": [
+                {
+                  "label": "iTRAQ114",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ115",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ116",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ117",
+                  "sourceName": "HeLa_EGF"
+                }
+              ],
+              "factorValues": {
+                "instrument": "Synapt G2-Si"
+              },
+              "files": [
+                {
+                  "fileName": "InGelPiTRAQSynaptG2Si_MW1.raw.zip",
+                  "fractionId": 1,
+                  "technicalReplicate": 1
+                }
+              ]
+            },
+            {
+              "name": "InGelPiTRAQSynaptG2Si_MW2",
+              "labelConfigId": "itraq4plex",
+              "channels": [
+                {
+                  "label": "iTRAQ114",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ115",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ116",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ117",
+                  "sourceName": "HeLa_EGF"
+                }
+              ],
+              "factorValues": {
+                "instrument": "Synapt G2-Si"
+              },
+              "files": [
+                {
+                  "fileName": "InGelPiTRAQSynaptG2Si_MW2.raw.zip",
+                  "fractionId": 2,
+                  "technicalReplicate": 1
+                }
+              ]
+            },
+            {
+              "name": "InGelPiTRAQSynaptG2Si_MW3",
+              "labelConfigId": "itraq4plex",
+              "channels": [
+                {
+                  "label": "iTRAQ114",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ115",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ116",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ117",
+                  "sourceName": "HeLa_EGF"
+                }
+              ],
+              "factorValues": {
+                "instrument": "Synapt G2-Si"
+              },
+              "files": [
+                {
+                  "fileName": "InGelPiTRAQSynaptG2Si_MW3.raw.zip",
+                  "fractionId": 3,
+                  "technicalReplicate": 1
+                }
+              ]
+            },
+            {
+              "name": "InGelPiTRAQSynaptG2Si_MW4",
+              "labelConfigId": "itraq4plex",
+              "channels": [
+                {
+                  "label": "iTRAQ114",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ115",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ116",
+                  "sourceName": "HeLa_EGF"
+                },
+                {
+                  "label": "iTRAQ117",
+                  "sourceName": "HeLa_EGF"
+                }
+              ],
+              "factorValues": {
+                "instrument": "Synapt G2-Si"
+              },
+              "files": [
+                {
+                  "fileName": "InGelPiTRAQSynaptG2Si_MW4.raw.zip",
+                  "fractionId": 4,
+                  "technicalReplicate": 1
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "label": "Runs & Files plan: 15 acquisitions, iTRAQ 4-plex channels, fractions 1-4, instrument factor per run"
+    }
+  ]
+}

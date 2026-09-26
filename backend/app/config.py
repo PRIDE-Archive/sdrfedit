@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -32,8 +33,12 @@ class Settings(BaseSettings):
     llm_auth_header: str = "Authorization"
     llm_model: str = "gpt-4o-mini"
     llm_temperature: float = 0.2
+    # Empty preserves provider defaults and compatibility with other gateways.
+    llm_reasoning_effort: Literal["", "low", "high", "max"] = ""
     llm_max_tool_rounds: int = 16
     llm_timeout_seconds: float = 120.0
+    # Opt-in: some compatible gateways reject stream_options.
+    llm_stream_include_usage: bool = False
 
     embedding_base_url: str = "https://api.openai.com/v1"
     embedding_api_key: str = ""

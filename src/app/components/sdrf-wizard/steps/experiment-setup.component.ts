@@ -29,35 +29,18 @@ import { TemplateColumnsPreviewComponent } from '../template-columns-preview.com
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="step-container">
-      <div class="step-header">
-        <h3>What type of experiment is this?</h3>
+      <section class="question-region" aria-labelledby="experiment-type-question">
+      <header class="question-header">
+        <span class="question-number" aria-hidden="true">1</span>
+        <div class="question-heading">
+        <h3 id="experiment-type-question">What type of experiment is this?</h3>
         <p class="step-description">
           Choose a <strong>technology</strong>, then add your <strong>sample</strong> templates. Select a template to reveal more specific options.
         </p>
-      </div>
-
-      <button type="button" class="info-banner" (click)="toggleTemplateInfo()" [attr.aria-expanded]="showTemplateInfo()">
-        <span class="info-icon">i</span>
-        <span class="info-content"><strong>How templates work</strong><span>Start broad, then refine. Compatibility is checked automatically.</span></span>
-        <span class="expand-icon" aria-hidden="true">{{ showTemplateInfo() ? '−' : '+' }}</span>
-      </button>
-
-      @if (showTemplateInfo()) {
-        <div class="template-layers-info">
-          <div class="layer-info">
-            <span class="layer-badge layer-technology">Technology</span>
-            <span class="layer-desc">Required — select a technology to reveal its specialized templates</span>
-          </div>
-          <div class="layer-info">
-            <span class="layer-badge layer-sample">Sample</span>
-            <span class="layer-desc">Sample metadata — compatibility follows the template rules</span>
-          </div>
-          <div class="layer-info">
-            <span class="layer-badge layer-experiment">Experiment</span>
-            <span class="layer-desc">Optional add-ons — cell-lines, DIA, crosslinking, …</span>
-          </div>
         </div>
-      }
+        <span class="question-badge">Required</span>
+      </header>
+      <div class="question-body">
 
       <label class="dev-toggle">
         <input type="checkbox" [ngModel]="showDevTemplates()" (ngModelChange)="showDevTemplates.set($event)" />
@@ -161,42 +144,6 @@ import { TemplateColumnsPreviewComponent } from '../template-columns-preview.com
         </div>
       }
 
-      <!-- Sample Count -->
-      <div class="form-section">
-        <label class="form-label">
-          How many samples do you have?
-          <span class="help-text">Biological samples (not including fractions or technical replicates)</span>
-        </label>
-        <div class="sample-count-input">
-          <button type="button" class="count-btn" (click)="decrementSamples()" [disabled]="wizardState.sampleCount() <= 1">-</button>
-          <input
-            type="number"
-            [ngModel]="wizardState.sampleCount()"
-            (ngModelChange)="setSampleCount($event)"
-            min="1"
-            max="1000"
-            class="count-input"
-          />
-          <button type="button" class="count-btn" (click)="incrementSamples()" [disabled]="wizardState.sampleCount() >= 1000">+</button>
-        </div>
-      </div>
-
-      @if (aiEnabled) {
-        <div class="form-section">
-          <label class="form-label">
-            Describe your experiment
-            <span class="optional-badge">Optional - helps AI suggestions</span>
-          </label>
-          <textarea
-            class="form-textarea"
-            [ngModel]="state().experimentDescription"
-            (ngModelChange)="setDescription($event)"
-            placeholder="E.g., Comparing protein expression between healthy and cancer tissues..."
-            rows="3"
-          ></textarea>
-        </div>
-      }
-
       @if (combination().warnings.length > 0) {
         <div class="hint-message">
           @for (w of combination().warnings; track w) {
@@ -204,6 +151,36 @@ import { TemplateColumnsPreviewComponent } from '../template-columns-preview.com
           }
         </div>
       }
+      </div>
+      </section>
+
+      <section class="question-region" aria-labelledby="sample-count-question">
+        <header class="question-header">
+          <span class="question-number" aria-hidden="true">2</span>
+          <div class="question-heading">
+            <h3 id="sample-count-question"><label for="setup-sample-count">How many samples do you have?</label></h3>
+            <p class="step-description" id="sample-count-help">Count biological samples. Fractions and technical replicates are added later.</p>
+          </div>
+          <span class="question-badge">Required</span>
+        </header>
+        <div class="question-body">
+        @if (wizardState.sampleCountError()) { <p role="alert">{{ wizardState.sampleCountError() }}</p> }
+        <div class="sample-count-input">
+          <button type="button" class="count-btn" aria-label="Decrease sample count" (click)="decrementSamples()" [disabled]="wizardState.sampleCount() <= 1">-</button>
+          <input
+            type="number"
+            id="setup-sample-count"
+            aria-describedby="sample-count-help"
+            [ngModel]="wizardState.sampleCount()"
+            (ngModelChange)="setSampleCount($event)"
+            min="1"
+            max="10000"
+            class="count-input"
+          />
+          <button type="button" class="count-btn" aria-label="Increase sample count" (click)="incrementSamples()" [disabled]="wizardState.sampleCount() >= 10000">+</button>
+        </div>
+        </div>
+      </section>
 
       @if (!wizardState.isStep1Valid()) {
         <div class="validation-message">
@@ -226,10 +203,10 @@ import { TemplateColumnsPreviewComponent } from '../template-columns-preview.com
       />
     </div>
   `,
+  styleUrls: ['./question-regions.css'],
   styles: [`
-    .step-container { max-width: 760px; }
-    .step-header { margin-bottom: 20px; }
-    .step-header h3 { margin: 0 0 8px; font-size: 18px; font-weight: 600; color: #1f2937; }
+    :host { display: block; width: 100%; min-width: 0; }
+    .step-container { width: 100%; min-width: 0; }
     .step-description { margin: 0; color: #64748b; font-size: 13px; line-height: 1.7; }
     .required { color: #ef4444; }
     .optional-hint { font-size: 12px; font-weight: 400; color: #9ca3af; margin-left: 6px; }
@@ -284,17 +261,13 @@ import { TemplateColumnsPreviewComponent } from '../template-columns-preview.com
     .status-dot { width: 6px; height: 6px; border-radius: 50%; background: #10b981; }
     .stale .status-dot { background: #d97706; }
     .snapshot-id { margin-left: auto; font-family: monospace; color: #64748b; }
-    .form-section { margin-bottom: 20px; }
-    .form-label { display: block; font-size: 14px; font-weight: 500; color: #374151; margin-bottom: 8px; }
-    .help-text { display: block; font-size: 12px; font-weight: normal; color: #6b7280; margin-top: 4px; }
-    .optional-badge { display: inline-block; font-size: 11px; font-weight: normal; color: #8b5cf6; background: #f3e8ff; padding: 2px 8px; border-radius: 4px; margin-left: 8px; }
     .sample-count-input { display: flex; align-items: center; width: fit-content; }
     .count-btn { width: 40px; height: 40px; border: 1px solid #d1d5db; background: white; font-size: 20px; color: #374151; cursor: pointer; }
     .count-btn:first-child { border-radius: 8px 0 0 8px; }
     .count-btn:last-child { border-radius: 0 8px 8px 0; }
     .count-btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .count-input { width: 80px; height: 40px; border: 1px solid #d1d5db; border-left: none; border-right: none; text-align: center; font-size: 16px; font-weight: 500; }
-    .form-textarea { width: 100%; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; resize: vertical; font-family: inherit; }
+    .form-textarea { box-sizing: border-box; width: 100%; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; resize: vertical; font-family: inherit; }
     .validation-message, .hint-message { display: flex; align-items: flex-start; gap: 8px; padding: 12px 16px; border-radius: 8px; font-size: 13px; margin-bottom: 8px; }
     .validation-message { background: #fef3c7; border: 1px solid #fcd34d; color: #92400e; }
     .hint-message { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; }
@@ -312,7 +285,8 @@ import { TemplateColumnsPreviewComponent } from '../template-columns-preview.com
     .layer-sample { background: #dbeafe; color: #1e40af; }
     .layer-technology { background: #dcfce7; color: #166534; }
     .layer-experiment { background: #fef3c7; color: #92400e; }
-    @media (max-width: 600px) { .template-grid { grid-template-columns: 1fr; } .icon-button { width: 40px; height: 40px; } .template-card { padding: 14px; } }
+    @media (max-width: 600px) {
+      .template-grid { grid-template-columns: 1fr; } .icon-button { width: 40px; height: 40px; } .template-card { padding: 14px; } }
     @media (prefers-reduced-motion: reduce) { .template-card { transition: none; } }
   `],
 })
@@ -325,7 +299,6 @@ export class ExperimentSetupComponent implements OnInit {
   readonly templateService = inject(TemplateService);
 
   readonly state = this.wizardState.state;
-  readonly showTemplateInfo = signal(false);
   readonly showDevTemplates = signal(false);
   readonly previewTemplateId = signal<string | null>(null);
   readonly selectionAttempt = signal<string | null>(null);
@@ -335,10 +308,6 @@ export class ExperimentSetupComponent implements OnInit {
 
   ngOnInit(): void {
     this.reload();
-  }
-
-  toggleTemplateInfo(): void {
-    this.showTemplateInfo.update(v => !v);
   }
 
   openColumnsPreview(templateId: string, event: Event): void {

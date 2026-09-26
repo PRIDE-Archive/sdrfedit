@@ -457,10 +457,18 @@ export function materializeSampleFieldsFromChoices(state: WizardState): WizardSt
     let next: WizardSampleEntry = { ...sample, characteristicValues: values };
 
     for (const [columnName, list] of Object.entries(choices)) {
-      if (list.length === 1) {
+      if (list.length === 1 && values[columnName] !== '') {
         values[columnName] = list[0].value;
       }
     }
+
+    // Explicitly unassigned cells must not fall back to stale legacy values.
+    if (values['characteristics[organism]'] === '') next.organism = 'not available';
+    if (values['characteristics[disease]'] === '') next.disease = 'not available';
+    if (values['characteristics[organism part]'] === '') next.organismPart = 'not available';
+    if (values['characteristics[age]'] === '') next.age = 'not available';
+    if (values['characteristics[sex]'] === '') next.sex = 'not available';
+    if (values['characteristics[cell line]'] === '') next.cellLine = 'not available';
 
     const get = (col: string) => values[col]?.trim() || '';
 
@@ -499,6 +507,7 @@ export function materializeSampleFieldsFromChoices(state: WizardState): WizardSt
         continue;
       }
       if (value?.trim()) custom[columnName] = value;
+      else if (value === '') custom[columnName] = 'not available';
     }
     next = { ...next, customCharacteristics: custom, characteristicValues: values };
     return next;
@@ -585,6 +594,10 @@ export type LabelType =
   | 'iTRAQ4plex-114' | 'iTRAQ4plex-115' | 'iTRAQ4plex-116' | 'iTRAQ4plex-117'
   | 'iTRAQ8plex-113' | 'iTRAQ8plex-114' | 'iTRAQ8plex-115' | 'iTRAQ8plex-116' | 'iTRAQ8plex-117' | 'iTRAQ8plex-118' | 'iTRAQ8plex-119' | 'iTRAQ8plex-121'
   | 'SILAC light' | 'SILAC medium' | 'SILAC heavy'
+  | `DIMETHYL${0 | 2 | 4 | 6 | 8}` | `MTRAQ${0 | 4 | 8}`
+  | `ICAT ${'light' | 'heavy'}` | `ICPL${0 | 4 | 6 | 10}`
+  | `${'15N' | '13C' | '18O'} ${'light' | 'heavy'}`
+  | `TMT${number}${'D' | 'ND' | 'CD'}` | 'TMT131N'
   | 'custom';
 
 /**
@@ -599,6 +612,15 @@ export interface LabelPlexConfig {
 /**
  * Available label configurations.
  */
+// PRIDE Label ontology: https://github.com/PRIDE-Utilities/pride-ontology/blob/master/pride_cv.obo
+const TMT_PRO_CHANNELS = ['TMT126', 'TMT127N', 'TMT127C', 'TMT128N', 'TMT128C', 'TMT129N', 'TMT129C', 'TMT130N', 'TMT130C', 'TMT131N', 'TMT131C', 'TMT132N', 'TMT132C', 'TMT133N', 'TMT133C', 'TMT134N'];
+const TMT_DEUTERATED_CHANNELS = ['TMT127D', ...[128, 129, 130, 131, 132, 133, 134].flatMap(mass => [`TMT${mass}ND`, `TMT${mass}CD`]), 'TMT135ND'];
+
+/** Convert legacy internal channel names to PRIDE names without changing saved mappings. */
+export function canonicalLabel(label: string): string {
+  return label.replace(/^iTRAQ(?:4|8)plex-(\d+)$/i, 'ITRAQ$1');
+}
+
 export const LABEL_CONFIGS: LabelPlexConfig[] = [
   { id: 'lf', name: 'Label-free (LFQ)', labels: ['label free sample'] },
   { id: 'tmt6', name: 'TMT 6-plex', labels: ['TMT126', 'TMT127N', 'TMT127C', 'TMT128N', 'TMT128C', 'TMT129N'] },
@@ -609,6 +631,19 @@ export const LABEL_CONFIGS: LabelPlexConfig[] = [
   { id: 'itraq4', name: 'iTRAQ 4-plex', labels: ['iTRAQ4plex-114', 'iTRAQ4plex-115', 'iTRAQ4plex-116', 'iTRAQ4plex-117'] },
   { id: 'itraq8', name: 'iTRAQ 8-plex', labels: ['iTRAQ8plex-113', 'iTRAQ8plex-114', 'iTRAQ8plex-115', 'iTRAQ8plex-116', 'iTRAQ8plex-117', 'iTRAQ8plex-118', 'iTRAQ8plex-119', 'iTRAQ8plex-121'] },
   { id: 'silac', name: 'SILAC', labels: ['SILAC light', 'SILAC medium', 'SILAC heavy'] },
+  { id: 'dimethyl2plex', name: 'Dimethyl 2-plex (0/4)', labels: ['DIMETHYL0', 'DIMETHYL4'] },
+  { id: 'dimethyl2plex08', name: 'Dimethyl 2-plex (0/8)', labels: ['DIMETHYL0', 'DIMETHYL8'] },
+  { id: 'dimethyl3plex', name: 'Dimethyl 3-plex (0/4/8)', labels: ['DIMETHYL0', 'DIMETHYL4', 'DIMETHYL8'] },
+  { id: 'dimethyl5plex', name: 'Dimethyl 5-plex (0/2/4/6/8)', labels: ['DIMETHYL0', 'DIMETHYL2', 'DIMETHYL4', 'DIMETHYL6', 'DIMETHYL8'] },
+  { id: 'mtraq3plex', name: 'mTRAQ 3-plex', labels: ['MTRAQ0', 'MTRAQ4', 'MTRAQ8'] },
+  { id: 'icat2plex', name: 'ICAT 2-plex', labels: ['ICAT light', 'ICAT heavy'] },
+  { id: 'icpl4plex', name: 'ICPL 4-plex', labels: ['ICPL0', 'ICPL4', 'ICPL6', 'ICPL10'] },
+  { id: '15n2plex', name: '15N 2-plex', labels: ['15N light', '15N heavy'] },
+  { id: '13c2plex', name: '13C 2-plex', labels: ['13C light', '13C heavy'] },
+  { id: '18o2plex', name: '18O 2-plex', labels: ['18O light', '18O heavy'] },
+  { id: 'tmt32', name: 'TMTpro 32-plex', labels: [...TMT_PRO_CHANNELS, ...TMT_DEUTERATED_CHANNELS] },
+  { id: 'tmt34', name: 'TMTpro 34-plex', labels: [...TMT_PRO_CHANNELS, ...TMT_DEUTERATED_CHANNELS, 'TMT134C', 'TMT135CD'] },
+  { id: 'tmt35', name: 'TMTpro 35-plex', labels: [...TMT_PRO_CHANNELS, 'TMT134C', 'TMT135N', ...TMT_DEUTERATED_CHANNELS, 'TMT135CD'] },
 ];
 
 // ============ Modification ============
@@ -703,6 +738,8 @@ export type ChannelRole = 'sample' | 'empty' | 'bridge' | 'carrier' | 'pooled';
  * Assignment of one plex channel inside an MS run.
  */
 export interface WizardChannelAssignment {
+  /** Stable identity for an independent label-free measurement row. */
+  mappingId?: string;
   /** Channel label (e.g. TMT126) */
   label: string;
   role: ChannelRole;
@@ -719,6 +756,9 @@ export interface WizardChannelAssignment {
  * Each run may use its own plex kit — mixed kits in one experiment are allowed.
  */
 export interface WizardMsRun {
+  groupMembers?: number[];
+  /** Label-free files map individually to selected samples instead of a pooled channel. */
+  sampleMappingMode?: 'separate' | 'pooled' | 'rows';
   /** Original automatic placeholder contents; only unchanged placeholders may be removed. */
   placeholderSnapshot?: string;
   factorValues?: Record<string, string>;
@@ -740,13 +780,28 @@ export interface WizardMsRun {
   channels: WizardChannelAssignment[];
 }
 
+/** Candidate values and raw-file assignments for one protocol column. */
+export type ProtocolValue = OntologyTerm | WizardCleavageAgent | WizardModification[] | string;
+export interface ProtocolChoice { id: string; value: ProtocolValue; }
+export interface ProtocolField {
+  choices: ProtocolChoice[];
+  /** Shared value also applies to files added later. */
+  allChoiceId?: string;
+  /** Explicit assignments are keyed by raw filename, never by row/sample index. */
+  assignments: Record<string, string>;
+}
+
 /**
  * A data file entry — truth source for fraction / tech.
  * Multiplex: bind runId (one file expands to used channels).
  * Label-free: bind sampleIndex.
  */
 export interface WizardDataFile {
+  /** Independent label-free measurement owning this file. */
+  mappingId?: string;
   fileName: string;
+  /** Repository-provided full download URL, separate from the mapping key. */
+  downloadUrl?: string;
   /** Fraction identifier (defaults to 1) */
   fractionId?: number;
   /** Technical replicate number (defaults to 1) */
@@ -774,6 +829,8 @@ export interface WizardExpansionRow {
   fractionId: number;
   technicalReplicate: number;
   fileName: string;
+  /** Repository-provided full download URL, separate from the mapping key. */
+  downloadUrl?: string;
   runId?: string;
   role: ChannelRole;
   biologicalReplicate: number;
@@ -1244,7 +1301,17 @@ export function buildWizardExpansionRows(state: WizardState): WizardExpansionRow
     if (file.runId || runs.length > 0) {
       const run = runs.find(r => r.id === file.runId);
       if (!run) continue;
-      const used = getUsedChannels(run);
+      if (run.sampleMappingMode === 'separate' && resolveRunLabelConfigId(run, state) === 'lf') {
+        const sample = findSample(samples, file.sampleIndex);
+        if (!sample || !run.sampleIndices?.includes(sample.index)) continue;
+        rows.push({ rowIndex: rowIndex++, sourceName: sample.sourceName, sampleIndex: sample.index,
+          label: 'label free sample', fractionId: file.fractionId ?? 1, technicalReplicate: file.technicalReplicate ?? 1,
+          fileName: file.fileName, downloadUrl: file.downloadUrl, runId: run.id, role: 'sample', biologicalReplicate: sample.biologicalReplicate });
+        continue;
+      }
+      const used = run.sampleMappingMode === 'rows' && resolveRunLabelConfigId(run, state) === 'lf'
+        ? getUsedChannels(run).filter(ch => !!file.mappingId && ch.mappingId === file.mappingId)
+        : getUsedChannels(run);
       for (const channel of used) {
         const sample = findSample(samples, channel.sampleIndex);
         rows.push({
@@ -1254,7 +1321,7 @@ export function buildWizardExpansionRows(state: WizardState): WizardExpansionRow
           label: channel.label,
           fractionId: file.fractionId ?? 1,
           technicalReplicate: file.technicalReplicate ?? 1,
-          fileName: file.fileName,
+          fileName: file.fileName, downloadUrl: file.downloadUrl,
           runId: run.id,
           role: channel.role,
           biologicalReplicate: sample?.biologicalReplicate ?? 1,
@@ -1271,7 +1338,7 @@ export function buildWizardExpansionRows(state: WizardState): WizardExpansionRow
       label: 'label free sample',
       fractionId: file.fractionId ?? 1,
       technicalReplicate: file.technicalReplicate ?? 1,
-      fileName: file.fileName,
+      fileName: file.fileName, downloadUrl: file.downloadUrl,
       role: 'sample',
       biologicalReplicate: sample?.biologicalReplicate ?? 1,
     });
@@ -1366,18 +1433,35 @@ export function applyRunsFilesPlan(state: WizardState, input: unknown): WizardSt
     const kit = LABEL_CONFIGS.find(k => k.id === group['labelConfigId']);
     if (!kit) throw new Error(`Unknown label kit for ${name}.`);
     if (!Array.isArray(group['channels']) || !group['channels'].length) throw new Error(`No channels for ${name}.`);
-    const channels = createEmptyChannelsForLabels(kit.labels);
+    const rowMapping = group['sampleMappingMode'] === 'rows';
+    if (group['sampleMappingMode'] !== undefined && !rowMapping) {
+      throw new Error('Plans support sampleMappingMode "rows" or shared channel mapping.');
+    }
+    if (rowMapping && kit.id !== 'lf') throw new Error('Row mapping requires label-free acquisition.');
+    const channels: WizardChannelAssignment[] = rowMapping ? [] : createEmptyChannelsForLabels(kit.labels);
     const labels = new Set<string>();
+    const sampleIndexForName = (value: unknown): number => {
+      const source = str(value);
+      const samples = state.samples.filter(s => s.sourceName === source);
+      if (samples.length !== 1) throw new Error(`Expected exactly one sample named ${source}.`);
+      return samples[0].index;
+    };
     for (const rawChannel of group['channels']) {
       const ch = obj(rawChannel);
       const label = str(ch['label']);
-      const target = channels.find(c => c.label === label);
-      if (!target || labels.has(label)) throw new Error(`Invalid or duplicate channel: ${label}`);
-      labels.add(label);
-      const source = str(ch['sourceName']);
-      const samples = state.samples.filter(s => s.sourceName === source);
-      if (samples.length !== 1) throw new Error(`Expected exactly one sample named ${source}.`);
-      Object.assign(target, { role: 'sample', sampleIndex: samples[0].index });
+      const key = rowMapping ? str(ch['mappingId']) : label;
+      if (!kit.labels.includes(label as LabelType) || labels.has(key)) throw new Error(`Invalid or duplicate channel: ${key}`);
+      labels.add(key);
+      const target = rowMapping ? { label, role: 'empty' as const, mappingId: key } : channels.find(c => c.label === label)!;
+      if (rowMapping) channels.push(target);
+      if (ch['pooledSourceNames'] !== undefined) {
+        if (ch['sourceName'] !== undefined || !Array.isArray(ch['pooledSourceNames'])) throw new Error('Use sourceName or pooledSourceNames, not both.');
+        const indices = ch['pooledSourceNames'].map(sampleIndexForName);
+        if (indices.length < 2 || new Set(indices).size !== indices.length) throw new Error('A pool needs at least two distinct samples.');
+        Object.assign(target, { role: 'pooled', pooledSampleIndices: indices });
+      } else {
+        Object.assign(target, { role: 'sample', sampleIndex: sampleIndexForName(ch['sourceName']) });
+      }
     }
     const factorValues: Record<string, string> = {};
     const proposedFactors = obj(group['factorValues'] ?? {});
@@ -1391,7 +1475,8 @@ export function applyRunsFilesPlan(state: WizardState, input: unknown): WizardSt
     }
     const run: WizardMsRun = {
       id: matches[0]?.id ?? newRunId(), name, labelConfigId: kit.id, channels, factorValues,
-      sampleIndices: channels.flatMap(c => c.sampleIndex == null ? [] : [c.sampleIndex]),
+      ...(rowMapping ? { sampleMappingMode: 'rows' as const } : {}),
+      sampleIndices: [...new Set(channels.flatMap(c => c.role === 'pooled' ? c.pooledSampleIndices || [] : c.sampleIndex == null ? [] : [c.sampleIndex]))],
     };
     if (!Array.isArray(group['files']) || !group['files'].length) throw new Error(`No files for ${name}.`);
     for (const rawFile of group['files']) {
@@ -1401,7 +1486,13 @@ export function applyRunsFilesPlan(state: WizardState, input: unknown): WizardSt
       assigned.add(fileName);
       const matches = files.filter(f => f.fileName.trim() === fileName);
       if (matches.length !== 1) throw new Error(`Expected exactly one file in the pool named ${fileName}. Import exact file names first.`);
-      Object.assign(matches[0], { runId: run.id, fractionId: integer(file['fractionId']), technicalReplicate: integer(file['technicalReplicate']) });
+      const mappingId = rowMapping ? str(file['mappingId']) : undefined;
+      if (rowMapping && !channels.some(ch => ch.mappingId === mappingId)) throw new Error(`Unknown sample mapping for ${fileName}.`);
+      // Clear stale legacy per-file assignments when replacing a group's mapping.
+      delete matches[0].sampleIndex;
+      delete matches[0].mappingId;
+      Object.assign(matches[0], { runId: run.id, ...(mappingId ? { mappingId } : {}),
+        fractionId: integer(file['fractionId']), technicalReplicate: integer(file['technicalReplicate']) });
     }
     // Updating shared channels/factors affects every file in this group: require explicit coverage.
     if (files.some(f => f.runId === run.id && !group['files'].some((f2: any) => f2.fileName === f.fileName.trim()))) {
@@ -1434,12 +1525,31 @@ export function validateMsRuns(state: WizardState): boolean {
 
   for (const run of runs) {
     if (state.dataFiles.some(f => !!f.runId) && !state.dataFiles.some(f => f.runId === run.id)) continue;
+    if (run.sampleMappingMode === 'rows' && resolveRunLabelConfigId(run, state) === 'lf') {
+      const files = state.dataFiles.filter(f => f.runId === run.id);
+      for (const file of files) {
+        const ch = run.channels.find(c => !!file.mappingId && c.mappingId === file.mappingId);
+        if (!ch || ch.role === 'empty') return false;
+        if (ch.role === 'sample' && !state.samples.some(s => s.index === ch.sampleIndex)) return false;
+        if (ch.role === 'pooled' && ((ch.pooledSampleIndices?.length ?? 0) < 2 || new Set(ch.pooledSampleIndices).size !== ch.pooledSampleIndices?.length || ch.pooledSampleIndices!.some(i => !state.samples.some(s => s.index === i)))) return false;
+      }
+      if (!files.length && !getUsedChannels(run).length) return false;
+      continue;
+    }
+    if (run.sampleMappingMode === 'separate' && resolveRunLabelConfigId(run, state) === 'lf') {
+      if (!run.sampleIndices?.length || run.sampleIndices.some(i => !state.samples.some(s => s.index === i))) return false;
+      if (state.dataFiles.filter(f => f.runId === run.id).some(f => f.sampleIndex == null || !run.sampleIndices!.includes(f.sampleIndex))) return false;
+      continue;
+    }
     const used = getUsedChannels(run);
     if (used.length === 0) return false;
     for (const ch of used) {
       if (ch.role === 'sample' && (ch.sampleIndex == null || !state.samples.some(s => s.index === ch.sampleIndex))) {
         return false;
       }
+      if (ch.role === 'pooled' && ch.pooledSampleIndices?.length &&
+        (new Set(ch.pooledSampleIndices).size < 2 || new Set(ch.pooledSampleIndices).size !== ch.pooledSampleIndices.length ||
+          ch.pooledSampleIndices.some(i => !state.samples.some(s => s.index === i)))) return false;
       if (ch.role === 'pooled' && !(ch.pooledSampleIndices?.length)) {
         // Allow pooled with override name only
         if (!ch.sourceNameOverride?.trim()) return false;
@@ -1493,6 +1603,8 @@ export function upsertDynamicColumnDefault(
  * Complete wizard state.
  */
 export interface WizardState {
+  /** Navigation schema: v2 merges characteristics and sample assignments. */
+  wizardFlowVersion?: number;
   selectedTemplates?: TemplateRef[];
   templateSnapshotId?: string;
   effectiveColumns?: TemplateColumn[];
@@ -1555,6 +1667,7 @@ export interface WizardState {
   acquisitionMethod: 'dda' | 'dia' | 'prm' | 'srm';
 
   // Step 5: Instrument & Protocol
+  protocolFields?: Record<string, ProtocolField>;
   instrument: OntologyTerm | null;
   cleavageAgent: WizardCleavageAgent | null;
   modifications: WizardModification[];
@@ -1605,6 +1718,7 @@ export function createDefaultSample(index: number): WizardSampleEntry {
  */
 export function createEmptyWizardState(): WizardState {
   return {
+    wizardFlowVersion: 2,
     // Step 1
     template: null,
     selectedTemplates: [],
@@ -1690,11 +1804,10 @@ export interface WizardStepConfig {
  */
 export const WIZARD_STEPS: WizardStepConfig[] = [
   { id: 'setup', title: 'Experiment Setup', description: 'Select sample and technology templates', isRequired: true },
-  { id: 'characteristics', title: 'Sample Characteristics', description: 'Define organism, disease, and tissue', isRequired: true },
   {
     id: 'samples',
-    title: 'Sample Values',
-    description: 'Names, replicates, per-sample values, and study factors',
+    title: 'Samples & Groups',
+    description: 'Complete your sample list, attributes, and study groups',
     isRequired: true,
   },
   {
@@ -1716,10 +1829,24 @@ export function factorCandidates(state: WizardState, factor: WizardFactor): stri
 export function resolveFactorValue(state: WizardState, sample: WizardSampleEntry, factor: WizardFactor): string {
   const candidates = factorCandidates(state, factor);
   if (factor.sourceCharacteristic) {
-    return candidates.length === 1 ? candidates[0]
-      : sample.characteristicValues?.[factor.sourceCharacteristic]?.trim() || '';
+    return sample.characteristicValues?.[factor.sourceCharacteristic]?.trim() ?? (candidates.length === 1 ? candidates[0] : '');
   }
   return sample.factorValues?.[factor.name]?.trim() || (candidates.length === 1 ? candidates[0] : '');
+}
+
+/** Group only observed sample-level factor combinations, preserving missing values distinctly. */
+export function groupSamplesByFactors(state: WizardState, factorNames: string[]): { name: string; members: number[] }[] {
+  const factors = state.factors.filter(f => f.enabled && f.scope !== 'run' && factorNames.includes(f.name));
+  if (!factors.length) return [];
+  const groups = new Map<string, { name: string; members: number[] }>();
+  for (const sample of state.samples) {
+    const values = factors.map(f => resolveFactorValue(state, sample, f).trim());
+    const key = JSON.stringify(values.map(value => value.toLowerCase()));
+    const group = groups.get(key) || { name: factors.map((f, i) => `${f.name}: ${values[i] || '(unassigned)'}`).join(' · '), members: [] };
+    group.members.push(sample.index);
+    groups.set(key, group);
+  }
+  return [...groups.values()];
 }
 
 export function factorDefinitionErrors(state: WizardState): string[] {
@@ -1766,4 +1893,86 @@ export function factorDecisionValid(state: WizardState): boolean {
   return state.factorDecision === 'none'
     ? enabled.length === 0 && !!state.noFactorReason.trim()
     : enabled.length > 0 && factorDefinitionErrors(state).length === 0;
+}
+
+export function characteristicValueError(state: WizardState, name: string, value: string): string {
+  if (!state.characteristicColumns.some(column => column.name === name)) return 'This attribute is no longer available.';
+  const column = state.effectiveColumns?.find(column => column.name === name);
+  return column ? templateFieldError(column, value.trim()) : '';
+}
+
+/** Actionable completion checks shared by the merged sample page and navigation. */
+export function sampleCompletionErrors(state: WizardState, includeDefinitions = true): string[] {
+  const errors: string[] = [];
+  if (includeDefinitions) {
+    if (!state.effectiveColumns?.length) errors.push('Load the selected template attributes before continuing.');
+    if (!factorDecisionValid(state)) errors.push('Confirm study groups, or explain why no study factors apply.');
+    errors.push(...factorDefinitionErrors(state));
+  }
+  if (!state.samples.length) errors.push('Add at least one biological sample.');
+  const required = state.characteristicColumns.filter(c => c.requirement === 'required'
+    && !isWizardSkippedCharacteristic(c.name) && getSpecialtyCharacteristicKey(c.name) !== 'material type');
+  for (const column of state.characteristicColumns) {
+    for (const choice of state.characteristicChoices[column.name] || []) {
+      const error = characteristicValueError(state, column.name, choice.value);
+      if (error) errors.push(`${column.name}: ${error}`);
+    }
+  }
+  for (const sample of state.samples) {
+    for (const [column, value] of Object.entries(sample.characteristicValues || {})) {
+      if (!value) continue;
+      const error = characteristicValueError(state, column, value);
+      if (error) errors.push(`${sample.sourceName} ${column}: ${error}`);
+    }
+    const name = sample.sourceName.trim() || `Sample ${sample.index}`;
+    if (!sample.sourceName.trim()) errors.push(`${name}: enter a sample name.`);
+    if (!Number.isInteger(sample.biologicalReplicate) || sample.biologicalReplicate < 1) {
+      errors.push(`${name}: enter a positive whole number for the biological replicate.`);
+    }
+    for (const column of required) {
+      const choices = state.characteristicChoices[column.name] || [];
+      const value = sample.characteristicValues?.[column.name] ?? (choices.length === 1 ? choices[0].value : '');
+      if (!value || !choices.some(choice => choiceValuesEqual(choice.value, value))) {
+        errors.push(`${name}: fill ${parseCharacteristicInnerName(column.name) || column.name}.`);
+      }
+    }
+    for (const factor of state.factors.filter(f => f.enabled && f.scope !== 'run')) {
+      const value = resolveFactorValue(state, sample, factor);
+      if (!value || !factorCandidates(state, factor).some(candidate => choiceValuesEqual(candidate, value))) {
+        errors.push(`${name}: assign study group ${factor.name}.`);
+      }
+    }
+  }
+  return errors;
+}
+
+/** Restore indices saved by the previous six-page wizard. */
+export function restoreWizardStep(step: number, version = 1): number {
+  const index = Math.max(0, Math.floor(step) || 0);
+  return Math.min(version < 2 && index >= 2 ? index - 1 : index, WIZARD_STEPS.length - 1);
+}
+
+export function templateFieldError(column: TemplateColumn, value: string): string {
+  if (!value.trim()) return column.requirement === 'required' ? 'This field is required.' : '';
+  const reserved: Record<string, boolean | undefined> = {
+    'not available': column.allowNotAvailable, 'not applicable': column.allowNotApplicable,
+    anonymized: column.allowAnonymized, pooled: column.allowPooled,
+  };
+  if (value.toLowerCase() in reserved) {
+    const permission = reserved[value.toLowerCase()];
+    if (permission === true) return '';
+    const enumerated = (column.validators || []).some(rule => rule.validatorName === 'values' &&
+      rule.params.values?.some(candidate => rule.params['case_sensitive']
+        ? String(candidate) === value : String(candidate).toLowerCase() === value.toLowerCase()));
+    if (permission === false || !enumerated) return 'This reserved value is not allowed by the template.';
+  }
+  if (column.type === 'integer' && !/^[+-]?\d+$/.test(value)) return 'Enter an integer.';
+  if (column.type === 'float' && !Number.isFinite(Number(value))) return 'Enter a number.';
+  for (const rule of column.validators || []) {
+    if (rule.params.errorLevel === 'warning') continue;
+    if (rule.validatorName === 'values' && !rule.params.values?.some(candidate => rule.params['case_sensitive']
+      ? String(candidate) === value : String(candidate).toLowerCase() === value.toLowerCase())) return 'Choose a value allowed by the template.';
+  }
+  // Python regex/ontology/structured validators run server-side; do not reinterpret them in JS.
+  return '';
 }

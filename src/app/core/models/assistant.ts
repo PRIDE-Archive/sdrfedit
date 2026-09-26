@@ -1,4 +1,4 @@
-import { WizardState } from './wizard';
+import { ProtocolField, WizardState } from './wizard';
 
 /**
  * Wizard AI assistant contracts.
@@ -49,6 +49,15 @@ export interface WizardActionCard {
   /** Present only on cards owned by an explicit automatic annotation run. */
   automationRunId?: string;
   autoApplied?: boolean;
+  executionState?: 'rolled-back' | 'not-executed' | 'superseded' | 'repair-rejected';
+  replacesCardId?: string;
+  replacedByCardId?: string;
+  repairHistory?: Array<{
+    attempt: number;
+    status: 'requested' | 'accepted' | 'rejected';
+    message: string;
+    replacementIds: string[];
+  }>;
 }
 
 export interface AutomationReport {
@@ -184,9 +193,13 @@ export interface WizardSnapshot {
   experimentDescription: string;
   characteristicColumns: CharacteristicColumnSnapshot[];
   characteristicChoices: Record<string, string[]>;
-  /** Current source names in wizard order (Step 3). */
+  protocolFields?: Record<string, ProtocolField>;
+  protocolIssues?: string[];
+  protocolColumns?: { name: string; requirement: string }[];
+  genericProtocolFields?: { name: string; requirement: string; description: string; value: string; options: string[]; type?: string; validators: unknown[]; allowNotAvailable?: boolean; allowNotApplicable?: boolean }[];
+  /** Current source names in wizard order (Step 2). */
   sampleSourceNames?: string[];
-  /** Detailed assignments are sent only by automatic runs, to preserve existing edits. */
+  /** Detailed assignments are sent on every assistant turn to preserve existing edits. */
   sampleAssignments?: {
     index: number;
     sourceName: string;
@@ -194,14 +207,15 @@ export interface WizardSnapshot {
     characteristicValues: Record<string, string>;
     factorValues: Record<string, string>;
   }[];
-  /** Current biological replicate numbers in wizard order (Step 3). */
+  /** Current biological replicate numbers in wizard order (Step 2). */
   biologicalReplicates?: number[];
-  /** Columns with 2+ Step-2 candidates that need per-sample values on Step 3. */
+  /** Columns with 2+ Step-2 candidates that need per-sample values on Step 2. */
   multiValueCharacteristicColumns?: string[];
   labelConfigId: string | null;
+  availableLabelConfigs?: { id: string; name: string; labels: string[] }[];
   msRunCount: number;
   /** Run name + bound sample source names (for file↔run matching). */
-  msRunSummaries?: { name: string; sampleSourceNames: string[]; factorValues?: Record<string, string>; labelConfigId?: string; channels?: {label: string; sourceName?: string; role: string}[]; files?: {fileName: string; fractionId: number; technicalReplicate: number}[] }[];
+  msRunSummaries?: { name: string; sampleSourceNames: string[]; sampleMappingMode?: 'separate' | 'pooled' | 'rows'; factorValues?: Record<string, string>; labelConfigId?: string; channels?: {label: string; sourceName?: string; role: string; mappingId?: string; pooledSourceNames?: string[]; sourceNameOverride?: string}[]; files?: {fileName: string; mappingId?: string; sourceName?: string; fractionId: number; technicalReplicate: number}[] }[];
   dataFileCount: number;
   /** All current raw file names in wizard order. */
   dataFileNames?: string[];
@@ -222,7 +236,7 @@ export interface WizardSnapshot {
   factorDefinitions?: { name: string; values: string[]; sourceCharacteristic?: string; reasoning?: string; scope?: 'sample' | 'run' }[];
   factorDecision?: 'pending' | 'none';
   noFactorReason?: string;
-  /** Factors with 2+ candidates needing per-sample picks on Step 3. */
+  /** Factors with 2+ candidates needing per-sample picks on Step 2. */
   multiValueFactorColumns?: string[];
   acquisitionMethod: string | null;
 }

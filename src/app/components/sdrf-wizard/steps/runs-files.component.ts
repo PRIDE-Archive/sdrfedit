@@ -18,6 +18,7 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { parseFileNameList } from '../../../core/utils/file-name-list';
 
 import { WizardStateService } from '../../../core/services/wizard-state.service';
 import {
@@ -27,6 +28,7 @@ import {
 } from '../../../core/services/pride-archive.service';
 import {
   LABEL_CONFIGS,
+  groupSamplesByFactors,
   WizardMsRun,
   WizardDataFile,
   WizardChannelAssignment,
@@ -59,41 +61,14 @@ const ACQUISITION: { id: AcquisitionMethod; label: string }[] = [
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="rf">
-      <header class="rf-header">
-        <div>
-          <h3>Runs &amp; Files</h3>
-          <p>
-            Create sample/channel groups on the left. Each raw file represents an acquisition. For each run: pick label kit → map channels,
-            then add raw files and fill fraction / tech.
-          </p>
-        </div>
-        <div class="rf-metrics">
-          <div class="metric" [class.alert]="unassignedCount() > 0">
-            <span class="metric-n">{{ unassignedCount() }}</span>
-            <span class="metric-l">in pool</span>
-          </div>
-          <div class="metric">
-            <span class="metric-n">{{ msRuns().length }}</span>
-            <span class="metric-l">runs</span>
-          </div>
-          <div class="metric">
-            <span class="metric-n">{{ sdrfRowCount() }}</span>
-            <span class="metric-l">SDRF rows</span>
-          </div>
-        </div>
-      </header>
-
       <!-- Import -->
-      <section class="import-card">
-        <div class="import-card-head">
-          <div>
-            <h4>1. Add raw file names to the pool</h4>
-            <p>Files stay in the pool until you attach them to a run.</p>
-          </div>
-          <button type="button" class="btn sm" [class.on]="showMore()" (click)="showMore.set(!showMore())">
-            Planner &amp; options
-          </button>
-        </div>
+      <section class="question-region" aria-labelledby="raw-files-question">
+        <header class="question-header">
+          <span class="question-number" aria-hidden="true">1</span>
+          <div class="question-heading"><h3 id="raw-files-question">Which raw files belong to your experiment?</h3><p class="step-description">Import file names from ProteomeXchange, paste a list, or upload a file list.</p></div>
+          <span class="question-badge">Required</span>
+        </header>
+        <div class="question-body">
         <div class="import-tabs">
           <button type="button" class="import-tab" [class.on]="importTab() === 'pxd'" (click)="importTab.set('pxd')">
             ProteomeXchange
@@ -115,7 +90,7 @@ const ACQUISITION: { id: AcquisitionMethod; label: string }[] = [
                 (click)="fetchFromPxd()">{{ pxdLoading() ? 'Fetching…' : 'Fetch' }}</button>
             </div>
           } @else if (importTab() === 'paste') {
-            <textarea class="textarea mono" rows="4" placeholder="One filename per line"
+            <textarea class="textarea mono" rows="4" placeholder='Separate filenames with spaces, commas, semicolons, tabs or newlines. Use double quotes for names containing spaces.'
               [ngModel]="pasteText()" (ngModelChange)="pasteText.set($event)"></textarea>
             <div class="row gap">
               <button type="button" class="btn accent" (click)="applyPaste(false)">Replace pool</button>
@@ -137,8 +112,47 @@ const ACQUISITION: { id: AcquisitionMethod; label: string }[] = [
             </div>
           }
         </div>
+        </div>
       </section>
 
+      @if (statusMsg()) {
+        <div class="toast" [class.err]="statusError()">{{ statusMsg() }}</div>
+      }
+
+      <section class="question-region" aria-labelledby="grouping-question">
+        <header class="question-header"><span class="question-number" aria-hidden="true">2</span><div class="question-heading"><h3 id="grouping-question">How would you like to group samples to map their metadata to raw files?</h3></div></header>
+        <div class="question-body">
+          <label class="grouping-label">Grouping method <select class="input" [ngModel]="groupingMode()" (ngModelChange)="changeGroupingMode($event)"><option value="all">All samples</option><option value="factors">Study factors</option><option value="custom">Custom groups</option></select></label>
+          @if (groupingMode() === 'factors') {
+            <div class="group-members" role="group" aria-label="Factors defining groups">
+              @for (factor of sampleGroupingFactors(); track factor.name) { <label><input type="checkbox" [checked]="groupingFactors().includes(factor.name)" (change)="toggleGroupingFactor(factor.name, $any($event.target).checked)" /> {{ factor.name }}</label> }
+            </div>
+          }
+          @if (groupingMode() === 'custom') {
+            @for (group of customGroups(); track $index; let gi = $index) {
+              <div class="custom-group"><div class="row"><input class="input grow" aria-label="Group name" placeholder="Group name" [ngModel]="group.name" (ngModelChange)="renameCustomGroup(gi, $event)" /><button type="button" class="btn sm" (click)="removeCustomGroup(gi)">Remove</button></div><div class="group-members">@for (sample of state().samples; track sample.index) { <label><input type="checkbox" [checked]="group.members.includes(sample.index)" (change)="toggleGroupMember(gi, sample.index, $any($event.target).checked)" /> {{ sample.sourceName }}</label> }</div></div>
+            }
+            <button type="button" class="link" (click)="addCustomGroup()">＋ Add group</button>
+          }
+          @if (proposedGroups().length) {
+            <div class="group-preview" aria-live="polite"><strong>{{ proposedGroups().length }} groups</strong>@for (group of proposedGroups(); track $index) { <div class="group-preview-row"><span>{{ groupPreviewName(group.name) || 'Unnamed group' }}</span><span class="group-preview-count">{{ group.members.length }} samples</span></div> }</div>
+          }
+          @if (groupingAffectedFiles()) { <p class="help">{{ groupingAffectedFiles() }} files will return to the pool.</p> }
+          @if (groupingPending()) {
+            <div class="row"><span class="help">{{ msRuns().length }} current groups → {{ proposedGroups().length }} new groups</span><button type="button" class="btn accent" (click)="applyGrouping()">Apply {{ proposedGroups().length }} groups</button></div>
+          }
+          @if (groupingError()) { <p class="toast err" role="alert">{{ groupingError() }}</p> }
+        </div>
+      </section>
+      <!-- Workspace -->
+      <section class="question-region" aria-labelledby="run-setup-question">
+        <header class="question-header">
+          <span class="question-number" aria-hidden="true">3</span>
+          <div class="question-heading"><h3 id="run-setup-question">How are samples and files linked within each group?</h3><p class="step-description">Select a group, choose its labels and mapping, then assign files to samples or pools.</p></div>
+          <span class="question-badge">Required</span>
+        </header>
+        <div class="question-body">
+          <div class="run-summary"><span>{{ unassignedCount() }} files in pool · {{ msRuns().length }} groups · {{ sdrfRowCount() }} SDRF rows</span><button type="button" class="btn sm" [class.on]="showMore()" (click)="showMore.set(!showMore())">Planner &amp; options</button></div>
       @if (showMore()) {
         <div class="drawer">
           <div class="more-grid">
@@ -183,34 +197,31 @@ const ACQUISITION: { id: AcquisitionMethod; label: string }[] = [
         </div>
       }
 
-      @if (statusMsg()) {
-        <div class="toast" [class.err]="statusError()">{{ statusMsg() }}</div>
-      }
-
-      <!-- Workspace -->
       <div class="workspace">
         <nav class="rail">
           <div class="rail-h">
-            <span>Sample/channel groups</span>
-            <button type="button" class="icon" title="Add run" (click)="addRun()">+</button>
+            <span>Sample groups</span>
+            <button type="button" class="icon" title="Add custom group" (click)="startCustomGrouping()">+</button>
           </div>
+          <div class="group-tabs">
           @for (run of msRuns(); track run.id) {
-            <div class="rail-item" [class.active]="selectedRunId() === run.id"
+            <div class="rail-item" role="button" tabindex="0" (keydown.enter)="selectRun(run.id)" (keydown.space)="$event.preventDefault(); selectRun(run.id)" [class.active]="selectedRunId() === run.id"
               (click)="selectRun(run.id)">
               <span class="rail-title">
                 @if (selectedRunId() === run.id) {
-                  <input class="rail-name" [ngModel]="run.name"
+                  <input class="rail-name" [ngModel]="groupDisplayName(run)"
                     (click)="$event.stopPropagation()"
                     (ngModelChange)="wizardState.renameMsRun(run.id, $event)"
-                    aria-label="Run name" />
+                    aria-label="Group name" />
                 } @else {
-                  <span class="rail-name-text">{{ run.name }}</span>
+                  <span class="rail-name-text">{{ groupDisplayName(run) }}</span>
                 }
                 <span class="kit">{{ kitShort(run) }}</span>
               </span>
               <span class="count">{{ filesForRun(run.id).length }}</span>
             </div>
           }
+          </div>
           @if (msRuns().length === 0) {
             <p class="empty-rail">Click + to add a run</p>
           }
@@ -223,7 +234,7 @@ const ACQUISITION: { id: AcquisitionMethod; label: string }[] = [
           @if (activeRun(); as run) {
               @if (runFactors().length) {
                 <div class="block">
-                  <h4>Technical study factors</h4>
+                  <h4>Which technical conditions are studied in this run?</h4>
                   <p class="help">Choose a value for every enabled technical factor before continuing.</p>
                   <p class="help">Assign the conditions studied in this run. The same biological sample can appear in runs with different conditions.</p>
                   @for (factor of runFactors(); track factor.name) {
@@ -239,7 +250,7 @@ const ACQUISITION: { id: AcquisitionMethod; label: string }[] = [
               <!-- Step 1: label kit -->
               <div class="block">
                 <div class="block-h">
-                  <h4><span class="n">1</span> Label kit</h4>
+                  <h4>Which labeling method was used?</h4>
                   <button type="button" class="btn danger" [disabled]="msRuns().length <= 1"
                     (click)="removeRun(run.id)">Delete</button>
                 </div>
@@ -255,17 +266,16 @@ const ACQUISITION: { id: AcquisitionMethod; label: string }[] = [
               <!-- Step 2: channel ↔ sample -->
               <div class="block">
                 <div class="block-h">
-                  <h4><span class="n">2</span> Channel ↔ sample</h4>
+                  <h4>{{ runKitId(run) === 'lf' ? 'Which samples and files belong together?' : 'Which samples belong to each channel?' }}</h4>
                 </div>
-                <p class="help">
-                  Assign any samples to each channel. None = skip; one = bind; multiple = pool.
-                  Hold &amp; drag in the dropdown to select a range.
-                </p>
                 <div class="channel-list">
-                  @for (ch of run.channels; track ch.label; let ci = $index) {
+                  @for (ch of run.channels; track ch.mappingId || ch.label; let ci = $index) {
+                    <div class="mapping-entry" [class.lf-entry]="runKitId(run) === 'lf'">
+                    <div class="mapping-card">
                     <div class="channel-row" [class.open]="samplePickerCi() === ci"
                       [class.filled]="channelSampleCount(ch) > 0">
-                      <span class="mono label-tag">{{ ch.label }}</span>
+                      <span class="mono label-tag">{{ runKitId(run) === 'lf' ? 'Label-free' : ch.label }}</span>
+                      <select class="input" aria-label="Channel mapping mode" [ngModel]="ch.role === 'pooled' ? 'pooled' : 'single'" (ngModelChange)="setChannelMode(run.id, ci, $event)"><option value="single">Single sample</option><option value="pooled">Pooled sample</option></select>
                       <div class="sample-dd" data-sample-dd
                         [class.open]="samplePickerCi() === ci"
                         [class.has-value]="channelSampleCount(ch) > 0">
@@ -295,12 +305,12 @@ const ACQUISITION: { id: AcquisitionMethod; label: string }[] = [
                         @if (samplePickerCi() === ci) {
                           <div class="sample-menu" (click)="$event.stopPropagation()">
                             <div class="sample-menu-tools">
-                              <button type="button" class="link" (click)="channelSelectAll(run.id, ci)">All</button>
+                              @if (ch.role === 'pooled') { <button type="button" class="link" (click)="channelSelectAll(run.id, ci)">All</button> }
                               <button type="button" class="link" (click)="channelClear(run.id, ci)">Clear</button>
-                              <span class="muted">Hold &amp; drag</span>
+                              @if (ch.role === 'pooled') { <span class="muted">Hold &amp; drag</span> }
                             </div>
                             <ul class="sample-menu-list" (mouseup)="endSampleDrag()">
-                              @for (s of state().samples; track s.index) {
+                              @for (s of availableGroupSamples(); track s.index) {
                                 <li
                                   class="sample-opt"
                                   [class.on]="isChannelSample(ch, s.index)"
@@ -312,156 +322,41 @@ const ACQUISITION: { id: AcquisitionMethod; label: string }[] = [
                                 </li>
                               }
                             </ul>
-                            @if (channelSampleCount(ch) > 1) {
-                              <input class="input pool-name" placeholder="Optional pool name"
+                            @if (ch.role === 'pooled') {
+                              <input class="input pool-name" placeholder="Pool name (optional)"
                                 [ngModel]="ch.sourceNameOverride || ''"
                                 (ngModelChange)="setChannelPoolName(run.id, ci, $event)" />
                             }
                           </div>
                         }
                       </div>
+                      @if (runKitId(run) === 'lf') {
+                        <div class="mapping-file-actions lf-actions">
+                          <button type="button" class="btn sm" [disabled]="!canAssignRowFiles(ch)" (click)="openRowFiles(ch)">Select files</button>
+                          <button type="button" class="link" (click)="removeRow(run.id, ch.mappingId!)">Remove</button>
+                        </div>
+                      }
+                    </div>
+                    </div>
+                    @if (runKitId(run) === 'lf') {
+                      <div class="mapping-files lf-files">
+                        @if (ch.role === 'pooled' && !canAssignRowFiles(ch)) { <span class="muted">Choose at least two samples.</span> }
+                        <ng-container *ngTemplateOutlet="fileMetadata; context: { run: run, mappingId: ch.mappingId }"></ng-container>
+                      </div>
+                    }
                     </div>
                   }
                 </div>
-              </div>
-
-              <!-- Step 3: files -->
-              <div class="block">
-                <div class="block-h">
-                  <h4><span class="n">3</span> Raw files in this run</h4>
-                  <button type="button" class="btn accent" (click)="openFilePicker()">
-                    + Add raw files from pool
-                  </button>
-                </div>
-                @if (filesForRun(run.id).length === 0) {
-                  <p class="muted">No files yet. Add from the pool ({{ unassignedCount() }} available).</p>
+                @if (runKitId(run) === 'lf') {
+                  <button type="button" class="btn add-mapping" (click)="addRow(run.id)">+ Add sample or pool</button>
                 } @else {
-                  <ul class="chip-list">
-                    @for (item of filesForRun(run.id); track item.index) {
-                      <li class="file-chip" [title]="item.file.fileName">
-                        <span class="name"><bdi>{{ item.file.fileName }}</bdi></span>
-                        <button type="button" class="x" title="Return to pool"
-                          (click)="returnOne(item.index)">×</button>
-                      </li>
-                    }
-                  </ul>
-                }
-              </div>
-
-              <!-- Step 4: fraction -->
-              <div class="block" [class.disabled]="filesForRun(run.id).length === 0">
-                <h4><span class="n">4</span> Fraction</h4>
-                <p class="help">Choosing an option updates all files in this run immediately. Fine-tune in the table below.</p>
-                <div class="fill-row">
-                  <label class="radio">
-                    <input type="radio" name="fmode" [checked]="fracMode() === 'all1'"
-                      (change)="setFracMode('all1', run.id)" /> All = 1
-                  </label>
-                  <label class="radio">
-                    <input type="radio" name="fmode" [checked]="fracMode() === 'seq'"
-                      (change)="setFracMode('seq', run.id)" /> Sequential 1, 2, 3…
-                  </label>
-                  <label class="radio">
-                    <input type="radio" name="fmode" [checked]="fracMode() === 'custom'"
-                      (change)="setFracMode('custom', run.id)" /> Custom list
-                  </label>
-                </div>
-                @if (fracMode() === 'custom') {
-                  <textarea class="textarea mono" rows="2"
-                    placeholder="One number per line (same order as files above)"
-                    [ngModel]="fracCustom()"
-                    (ngModelChange)="onFracCustomChange($event, run.id)"></textarea>
-                }
-                @if (fracMode() === 'seq') {
-                  <label class="inline">Start from
-                    <input type="number" class="num" min="1" [ngModel]="fracStart()"
-                      (ngModelChange)="onFracStartChange($event, run.id)" />
-                  </label>
-                }
-              </div>
-
-              <!-- Step 4: tech -->
-              <div class="block" [class.disabled]="filesForRun(run.id).length === 0">
-                <h4><span class="n">5</span> Technical replicate</h4>
-                <p class="help">Same as fraction — selection applies immediately.</p>
-                <div class="fill-row">
-                  <label class="radio">
-                    <input type="radio" name="tmode" [checked]="techMode() === 'all1'"
-                      (change)="setTechMode('all1', run.id)" /> All = 1
-                  </label>
-                  <label class="radio">
-                    <input type="radio" name="tmode" [checked]="techMode() === 'seq'"
-                      (change)="setTechMode('seq', run.id)" /> Sequential 1, 2, 3…
-                  </label>
-                  <label class="radio">
-                    <input type="radio" name="tmode" [checked]="techMode() === 'custom'"
-                      (change)="setTechMode('custom', run.id)" /> Custom list
-                  </label>
-                </div>
-                @if (techMode() === 'custom') {
-                  <textarea class="textarea mono" rows="2"
-                    placeholder="One number per line"
-                    [ngModel]="techCustom()"
-                    (ngModelChange)="onTechCustomChange($event, run.id)"></textarea>
-                }
-                @if (techMode() === 'seq') {
-                  <label class="inline">Start from
-                    <input type="number" class="num" min="1" [ngModel]="techStart()"
-                      (ngModelChange)="onTechStartChange($event, run.id)" />
-                  </label>
-                }
-              </div>
-
-              <!-- Step 6: editable table -->
-              <div class="block">
-                <div class="block-h">
-                  <h4><span class="n">6</span> Editable table</h4>
-                  <button type="button" class="btn sm" (click)="guessFractionTech(run.id)">Guess F/Tech from names</button>
-                </div>
-                @if (filesForRun(run.id).length === 0) {
-                  <p class="muted">Table appears after you add files.</p>
-                } @else {
-                  <div class="table-wrap">
-                    <table class="data edit">
-                      <thead>
-                        <tr>
-                          <th style="width:28px"></th>
-                          <th>Raw file / assay</th>
-                          <th>Samples / labels</th>
-                          <th>Study factors</th>
-                          <th style="width:72px">Fraction</th>
-                          <th style="width:72px">Tech</th>
-                          <th style="width:72px">→ rows</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        @for (item of filesForRun(run.id); track item.index) {
-                          <tr>
-                            <td>
-                              <button type="button" class="link danger" (click)="returnOne(item.index)">Remove</button>
-                            </td>
-                            <td>
-                              <input class="input mono file" [ngModel]="item.file.fileName" [title]="item.file.fileName"
-                                (ngModelChange)="wizardState.updateDataFile(item.index, { fileName: $event })" />
-                            </td>
-                            <td>{{ mappingSummary(run) }}</td>
-                            <td>{{ factorSummary(run) }}</td>
-                            <td>
-                              <input type="number" class="num" min="1" [ngModel]="item.file.fractionId ?? 1"
-                                (ngModelChange)="wizardState.updateDataFile(item.index, { fractionId: +$event || 1 })" />
-                            </td>
-                            <td>
-                              <input type="number" class="num" min="1" [ngModel]="item.file.technicalReplicate ?? 1"
-                                (ngModelChange)="wizardState.updateDataFile(item.index, { technicalReplicate: +$event || 1 })" />
-                            </td>
-                            <td class="accent-t">{{ usedChannelCount(run) }}</td>
-                          </tr>
-                        }
-                      </tbody>
-                    </table>
+                  <div class="mapping-files shared-files">
+                    <div class="mapping-file-actions"><span class="muted">Files shared by these channels</span><button type="button" class="btn sm" (click)="openFilePicker()">Select files</button></div>
+                    <ng-container *ngTemplateOutlet="fileMetadata; context: { run: run, mappingId: undefined }"></ng-container>
                   </div>
                 }
               </div>
+
           } @else {
             <div class="blank">
               <p class="blank-title">Select or create an MS run</p>
@@ -472,6 +367,66 @@ const ACQUISITION: { id: AcquisitionMethod; label: string }[] = [
         </section>
       </div>
 
+        </div>
+      </section>
+
+      <section class="question-region" aria-labelledby="file-review-question">
+        <header class="question-header">
+          <span class="question-number" aria-hidden="true">4</span>
+          <div class="question-heading"><h3 id="file-review-question">Review run and file metadata</h3><p class="step-description">Check sample mappings, fractions and technical replicates across all groups.</p></div>
+          <span class="question-badge">Required</span>
+        </header>
+        <div class="question-body">
+          <div class="run-summary"><span>{{ files().length - unassignedCount() }} files assigned · {{ sdrfRowCount() }} SDRF rows</span><button type="button" class="btn sm" [disabled]="files().length === unassignedCount()" (click)="guessAllFractionTech()">Guess F/Tech from names</button></div>
+          @if (files().length === unassignedCount()) {
+            <p class="muted">Assign files above to review their metadata.</p>
+          } @else {
+                  <div class="table-wrap review-table" tabindex="0" aria-label="Run and file metadata">
+                    <table class="data edit">
+                      <thead>
+                        <tr>
+                          <th style="width:28px"></th>
+                          <th>Group</th><th>Raw file / assay</th>
+                          <th>Samples / labels</th>
+                          <th>Study factors</th>
+                          <th style="width:72px">Fraction</th>
+                          <th style="width:72px">Tech</th>
+                          <th style="width:72px">→ rows</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        @for (run of msRuns(); track run.id) {
+                        @for (item of filesForRun(run.id); track item.index) {
+                          <tr>
+                            <td>
+                              <button type="button" class="link danger" (click)="returnOne(item.index)">Remove</button>
+                            </td>
+                            <td>{{ groupDisplayName(run) }}</td>
+                            <td>
+                              <input class="input mono file" [ngModel]="item.file.fileName" [title]="item.file.fileName"
+                                (ngModelChange)="wizardState.updateDataFile(item.index, { fileName: $event })" />
+                            </td>
+                            <td>{{ reviewFileSummary(item.index) }}</td>
+                            <td>{{ factorSummary(run) }}</td>
+                            <td>
+                              <input type="number" class="num" min="1" [ngModel]="item.file.fractionId ?? 1"
+                                (ngModelChange)="wizardState.updateDataFile(item.index, { fractionId: +$event || 1 })" />
+                            </td>
+                            <td>
+                              <input type="number" class="num" min="1" [ngModel]="item.file.technicalReplicate ?? 1"
+                                (ngModelChange)="wizardState.updateDataFile(item.index, { technicalReplicate: +$event || 1 })" />
+                            </td>
+                            <td class="accent-t">{{ reviewFileRows(item.index).length }}</td>
+                          </tr>
+                        }
+                        }
+                      </tbody>
+                    </table>
+                  </div>
+          }
+        </div>
+      </section>
+
       @if (!wizardState.isRunsFilesValid()) {
         <div class="warn">
           <span class="bang">!</span>
@@ -479,17 +434,34 @@ const ACQUISITION: { id: AcquisitionMethod; label: string }[] = [
         </div>
       }
 
+      <ng-template #fileMetadata let-run="run" let-mappingId="mappingId">
+        @if (metadataFiles(run.id, mappingId); as items) {
+          @if (items.length) {
+            <div class="metadata-tools"><span>{{ items.length }} files</span></div>
+            <div class="table-wrap mapping-table"><table class="data"><thead><tr><th>Raw file</th><th><span class="numbering-header">Fraction<button type="button" class="numbering-arrow" title="Number Fraction 1 to N" aria-label="Number Fraction ascending" (click)="numberFiles(run.id, mappingId, 'fractionId', 'asc')">↑</button><button type="button" class="numbering-arrow" title="Number Fraction N to 1" aria-label="Number Fraction descending" (click)="numberFiles(run.id, mappingId, 'fractionId', 'desc')">↓</button></span></th><th><span class="numbering-header">Tech<button type="button" class="numbering-arrow" title="Number Tech 1 to N" aria-label="Number Tech ascending" (click)="numberFiles(run.id, mappingId, 'technicalReplicate', 'asc')">↑</button><button type="button" class="numbering-arrow" title="Number Tech N to 1" aria-label="Number Tech descending" (click)="numberFiles(run.id, mappingId, 'technicalReplicate', 'desc')">↓</button></span></th><th></th></tr></thead><tbody>
+              @for (item of items; track item.index) {
+                <tr><td class="metadata-filename">{{ item.file.fileName }}</td>
+                  <td><input class="num" type="number" min="1" step="1" [attr.aria-label]="'Fraction for ' + item.file.fileName" [ngModel]="item.file.fractionId ?? 1" (ngModelChange)="updateFileMetadata(item.index, 'fractionId', $event)" /></td>
+                  <td><input class="num" type="number" min="1" step="1" [attr.aria-label]="'Technical replicate for ' + item.file.fileName" [ngModel]="item.file.technicalReplicate ?? 1" (ngModelChange)="updateFileMetadata(item.index, 'technicalReplicate', $event)" /></td>
+                  <td><button type="button" class="x" [attr.aria-label]="'Unassign ' + item.file.fileName" (click)="returnOne(item.index)">×</button></td>
+                </tr>
+              }
+            </tbody></table></div>
+          }
+        }
+      </ng-template>
+
       <!-- File picker modal -->
       @if (pickerOpen()) {
         <div class="modal-backdrop" (click)="closePicker()"></div>
         <div class="modal" role="dialog" aria-modal="true" aria-labelledby="picker-title">
           <div class="modal-h">
-            <h4 id="picker-title">Add raw files to {{ activeRun()?.name }}</h4>
+            <h4 id="picker-title">Add raw files to {{ pickerTargetName() }}</h4>
             <button type="button" class="icon" (click)="closePicker()">×</button>
           </div>
           <p class="help">
             Scroll and check files from the pool. Hold &amp; drag to select a range.
-            Already assigned to other runs are hidden.
+            Only unassigned files are shown.
           </p>
           <div class="modal-tools">
             <button type="button" class="link" (click)="pickerSelectAll()">Select all</button>
@@ -520,13 +492,18 @@ const ACQUISITION: { id: AcquisitionMethod; label: string }[] = [
       }
     </div>
   `,
+  styleUrls: ['./question-regions.css'],
   styles: [`
     :host { display: block; }
     .rf {
       --ink: #0f172a; --muted: #64748b; --line: #e2e8f0; --wash: #f8fafc;
-      --accent: #0284c7; --accent-soft: #e0f2fe; --warn: #b45309; --danger: #b91c1c;
+      --accent: #2563eb; --accent-soft: #eff6ff; --warn: #b45309; --danger: #b91c1c;
       max-width: 1100px; color: var(--ink);
     }
+    .step-description { margin: 0; color: #64748b; font-size: 13px; line-height: 1.6; }
+    .run-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 12px; color: #64748b; margin-bottom: 14px; }
+    .pane .block { margin: 12px; border: 1px solid #dbe3ee; border-radius: 10px; background: #fff; }
+    .pane .block h4 { color: #1f2937; }
     .rf-header { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 14px; }
     .rf-header h3 { margin: 0 0 6px; font-size: 20px; font-weight: 650; letter-spacing: -0.02em; }
     .rf-header p { margin: 0; max-width: 540px; font-size: 13px; line-height: 1.5; color: var(--muted); }
@@ -576,13 +553,14 @@ const ACQUISITION: { id: AcquisitionMethod; label: string }[] = [
     .muted { color: var(--muted); font-size: 12px; }
     .help { margin: 0 0 8px; font-size: 12px; color: var(--muted); line-height: 1.4; }
 
-    .workspace { display: grid; grid-template-columns: 200px minmax(0, 1fr); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: #fff; min-height: 480px; }
+    .workspace { display: grid; grid-template-columns: minmax(0, 1fr); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: #fff; min-height: 480px; }
     @media (max-width: 820px) { .workspace { grid-template-columns: 1fr; } }
-    .rail { background: var(--wash); border-right: 1px solid var(--line); padding: 10px 8px; }
+    .rail { background: var(--wash); border-bottom: 1px solid var(--line); padding: 10px 8px; }
     .rail-h { display: flex; justify-content: space-between; align-items: center; padding: 4px 8px 10px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
-    .rail-item { width: 100%; display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 9px 10px; border: none; border-radius: 8px; background: transparent; cursor: pointer; text-align: left; }
+    .group-tabs { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 6px; }
+    .rail-item { flex: 0 0 205px; min-width: 0; display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 9px 10px; border: none; border-radius: 8px; background: transparent; cursor: pointer; text-align: left; }
     .rail-item:hover { background: #fff; }
-    .rail-item.active { background: #fff; box-shadow: inset 3px 0 0 var(--accent); }
+    .rail-item.active { background: #fff; box-shadow: inset 0 -3px 0 var(--accent); }
     .rail-title { display: flex; flex-direction: column; gap: 2px; font-size: 13px; font-weight: 600; min-width: 0; flex: 1; }
     .rail-name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .rail-name {
@@ -594,6 +572,14 @@ const ACQUISITION: { id: AcquisitionMethod; label: string }[] = [
     .empty-rail { margin: 0; padding: 8px; font-size: 12px; color: var(--muted); }
     .pool-note { margin-top: 14px; padding: 8px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); }
 
+    .metadata-tools { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin: 8px 0; font-size: 12px; color: var(--muted); }
+    .numbering-header { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+    .numbering-arrow { border: 0; background: transparent; color: var(--accent); padding: 3px 6px; font-size: 15px; cursor: pointer; border-radius: 4px; }
+    .numbering-arrow:hover { background: var(--accent-soft); }
+    .metadata-tools .input { width: auto; max-width: 100%; }
+    .mapping-table { max-height: 280px; }
+    .mapping-table .num { width: 65px; min-width: 0; box-sizing: border-box; }
+    .metadata-filename { overflow-wrap: anywhere; }
     .pane { padding: 0 0 16px; min-width: 0; overflow: auto; max-height: min(70vh, 720px); }
     .pane .block { position: relative; }
 
@@ -611,9 +597,30 @@ const ACQUISITION: { id: AcquisitionMethod; label: string }[] = [
     .n { width: 22px; height: 22px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; }
 
     .field-l { font-size: 11px; font-weight: 650; color: var(--muted); }
+    .mapping-options { margin-bottom: 14px; }
+    .separate-sample { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
+    .separate-sample label { flex: 1; }
+    .sample-files { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px; }
+    .mapping-card { border: 1px solid #cbd5e1; border-radius: 10px; background: white; }
+    .mapping-card .channel-row { border: 0; }
+    .mapping-files { padding: 0 10px 10px; }
+    .lf-files { padding-top: 10px; }
+    .lf-entry { min-width: 0; }
+    .lf-entry > .mapping-card { min-width: 0; }
+    .lf-entry .channel-row { gap: 8px; padding: 8px; }
+    .lf-entry .channel-row > select.input { flex-basis: 126px; width: 126px; }
+    .lf-entry .label-tag { min-width: 78px; padding-inline: 7px; }
+
+    .mapping-file-actions.lf-actions { justify-content: flex-end; margin: 0; white-space: nowrap; gap: 8px; }
+    @media(max-width: 600px) { .lf-entry .lf-actions { margin-left: auto; } }
+
+    .mapping-entry + .mapping-entry { margin-top: 6px; }
+    .mapping-file-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+    .shared-files { margin-top: 14px; }
+    .add-mapping { margin-top: 12px; }
     .channel-list { display: flex; flex-direction: column; gap: 8px; }
     .channel-row {
-      display: flex; align-items: flex-start; gap: 10px;
+      display: flex; align-items: center; gap: 10px;
       border: 1.5px solid #cbd5e1; border-radius: 10px; padding: 10px; background: #fff;
     }
     .channel-row.filled { border-color: #7dd3fc; background: #f8fbff; }
@@ -621,8 +628,19 @@ const ACQUISITION: { id: AcquisitionMethod; label: string }[] = [
     .label-tag {
       font-size: 12px; font-weight: 650; padding: 8px 10px; border-radius: 8px;
       background: #f1f5f9; border: 1.5px solid #94a3b8; min-width: 88px; text-align: center;
-      flex-shrink: 0; color: #0f172a; margin-top: 2px;
+      flex-shrink: 0; color: #0f172a; margin-top: 0; box-sizing: border-box; height: 40px; display: flex; align-items: center; justify-content: center;
     }
+    .channel-row > select.input { height: 40px; box-sizing: border-box; flex: 0 0 142px; }
+    .group-members { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; font-size: 12px; }
+    .group-preview { margin: 14px 0; font-size: 12px; }
+    .group-preview > strong { display: block; margin-bottom: 6px; color: #475569; }
+    .group-preview-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+    .group-preview-row > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+    .group-preview-count { flex-shrink: 0; color: var(--muted); }
+    .group-members { max-height: 180px; overflow-y: auto; }
+    .custom-group { padding: 12px; margin-top: 12px; background: #f4f7fb; border-radius: 8px; }
+    .grouping-label { display: flex; align-items: center; gap: 12px; font-size: 13px; }
+    @media(max-width: 600px) { .channel-row { flex-wrap: wrap; } .channel-row .sample-dd { flex-basis: 100%; } }
     .sample-dd { position: relative; flex: 1; min-width: 0; z-index: 1; }
     .sample-dd.open { z-index: 30; }
     .sample-trigger {
@@ -637,6 +655,22 @@ const ACQUISITION: { id: AcquisitionMethod; label: string }[] = [
     .sample-dd.open .sample-trigger {
       border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); background: #fff;
     }
+    .channel-row > select.input,
+    .channel-row .sample-trigger {
+      appearance: none; height: 40px; min-height: 40px; box-sizing: border-box;
+      border: 1px solid #cbd5e1; border-radius: 8px; color: #334155;
+      background-color: #fff; padding: 0 28px 0 10px;
+      background-image: linear-gradient(45deg, transparent 50%, #64748b 50%), linear-gradient(135deg, #64748b 50%, transparent 50%);
+      background-position: calc(100% - 14px) 18px, calc(100% - 10px) 18px;
+      background-size: 4px 4px; background-repeat: no-repeat;
+    }
+    .channel-row > select.input:hover, .channel-row .sample-trigger:hover { border-color: #94a3b8; }
+    .channel-row > select.input:focus-visible, .channel-row .sample-trigger:focus-visible,
+    .channel-row .sample-dd.open .sample-trigger { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+    .channel-row .sample-trigger .caret { display: none; }
+    .channel-row .chip-wrap { flex-wrap: nowrap; overflow: hidden; }
+    .channel-row .sel-chip { flex-shrink: 1; min-width: 0; }
+    .lf-actions { flex-shrink: 0; }
     .sample-ph { flex: 1; color: #64748b; font-size: 13px; }
     .chip-wrap {
       flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
@@ -654,6 +688,17 @@ const ACQUISITION: { id: AcquisitionMethod; label: string }[] = [
       background: #0284c7; color: #fff;
     }
     .sel-count.pool { background: #d97706; }
+    .channel-row .label-tag,
+    .channel-row > select.input,
+    .channel-row .sample-trigger,
+    .channel-row .sample-ph,
+    .channel-row .sel-chip,
+    .channel-row .sel-count,
+    .mapping-file-actions > button {
+      font-family: inherit; font-size: 12px; font-weight: 500; line-height: 18px;
+    }
+    .mapping-file-actions > button { display: inline-flex; align-items: center; justify-content: center; min-height: 32px; }
+
     .caret { color: #475569; font-size: 12px; flex-shrink: 0; }
     .sample-menu {
       position: absolute; z-index: 40; left: 0; right: 0; top: calc(100% + 6px);
@@ -706,6 +751,11 @@ const ACQUISITION: { id: AcquisitionMethod; label: string }[] = [
     .inline { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
 
     .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+    .review-table { max-height: 460px; }
+    .review-table table { min-width: 850px; }
+    .review-table th { position: sticky; top: 0; z-index: 1; }
+    .review-table .file { min-width: 180px; }
+    .review-table .num { width: 72px; min-width: 0; box-sizing: border-box; }
     .data { width: 100%; border-collapse: collapse; font-size: 12px; }
     .data th, .data td { padding: 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
     .data th { background: var(--wash); color: var(--muted); font-weight: 650; font-size: 11px; }
@@ -810,6 +860,9 @@ export class RunsFilesComponent implements OnInit {
 
   private readonly syncSelectedRun = effect(() => {
     const runs = this.msRuns();
+    for (const run of runs) {
+      if (this.runKitId(run) === 'lf' && run.sampleMappingMode !== 'rows') this.wizardState.ensureLabelFreeRows(run.id);
+    }
     if (!runs.some(run => run.id === this.selectedRunId())) {
       this.selectedRunId.set(runs[0]?.id ?? null);
       this.closeSamplePicker();
@@ -825,6 +878,22 @@ export class RunsFilesComponent implements OnInit {
   selectRun(id: string): void {
     this.selectedRunId.set(id);
     this.closeSamplePicker();
+  }
+
+  metadataFiles(runId: string, mappingId?: string) {
+    return this.filesForRun(runId).filter(item => mappingId == null || item.file.mappingId === mappingId);
+  }
+  numberFiles(runId: string, mappingId: string | undefined, field: 'fractionId' | 'technicalReplicate', direction: 'asc' | 'desc'): void {
+    this.wizardState.numberScopedFiles(runId, mappingId, field, direction);
+  }
+  setFilePattern(runId: string, mappingId: string | undefined, pattern: string): void {
+    if (pattern === 'none' || pattern === 'fractions' || pattern === 'repeats') {
+      this.wizardState.setScopedFileMetadata(runId, mappingId, pattern);
+    }
+  }
+  updateFileMetadata(index: number, field: 'fractionId' | 'technicalReplicate', value: number | string): void {
+    const number = Number(value);
+    if (Number.isInteger(number) && number > 0) this.wizardState.updateDataFile(index, { [field]: number });
   }
 
   filesForRun(runId: string): { index: number; file: WizardDataFile }[] {
@@ -868,6 +937,7 @@ export class RunsFilesComponent implements OnInit {
   }
 
   onRunKitChange(runId: string, configId: string): void {
+    this.closeSamplePicker();
     this.wizardState.setRunLabelConfig(runId, configId);
   }
 
@@ -896,8 +966,62 @@ export class RunsFilesComponent implements OnInit {
   }
 
   /** All experiment samples are available for channel mapping. */
+  readonly groupingMode = signal('all');
+  readonly groupingFactors = signal<string[]>([]);
+  toggleGroupingFactor(name: string, checked: boolean): void { this.groupingFactors.update(names => checked ? [...new Set([...names, name])] : names.filter(n => n !== name)); this.groupingError.set(''); this.syncGroupingIfSafe(); }
+  changeGroupingMode(mode: string): void { this.groupingMode.set(mode); this.syncGroupingIfSafe(); }
+  private syncGroupingIfSafe(): void { if (this.groupingMode() !== 'custom' && this.proposedGroups().length && !this.groupingAffectedFiles() && this.groupingPending()) this.applyGrouping(); }
+  readonly groupingError = signal('');
+  readonly customGroups = signal<{ name: string; members: number[] }[]>([]);
+  readonly sampleGroupingFactors = computed(() => this.state().factors.filter(f => f.enabled && f.scope !== 'run'));
+  readonly availableGroupSamples = computed(() => { const members = this.activeRun()?.groupMembers; return this.state().samples.filter(s => !members || members.includes(s.index)); });
+  readonly proposedGroups = computed(() => {
+    if (this.groupingMode() === 'custom') {
+      const groups = this.customGroups(); const used = new Set(groups.flatMap(g => g.members));
+      const rest = this.state().samples.filter(s => !used.has(s.index)).map(s => s.index);
+      return rest.length ? [...groups, { name: 'Ungrouped samples', members: rest }] : groups;
+    }
+    if (this.groupingMode() === 'factors') return groupSamplesByFactors(this.state(), this.groupingFactors());
+    return [{ name: 'All samples', members: this.state().samples.map(s => s.index) }];
+  });
+  readonly groupingPending = computed(() => {
+    const groups = this.proposedGroups();
+    if (!groups.length) return false;
+    const signature = (name: string, members: number[]) => JSON.stringify([name, [...new Set(members)].sort((a,b) => a-b)]);
+    const current = this.msRuns().map(r => signature(r.name, r.groupMembers || [])).sort();
+    return JSON.stringify(current) !== JSON.stringify(groups.map(g => signature(g.name, g.members)).sort());
+  });
+  groupPreviewName(name: string): string {
+    if (this.groupingMode() !== 'factors') return name;
+    return name.split(' · ').map(part => part.slice(part.indexOf(': ') + 2)).join(' · ');
+  }
+  readonly groupingAffectedFiles = computed(() => {
+    if (!this.proposedGroups().length) return 0;
+    const retained = new Set<string>();
+    for (const group of this.proposedGroups()) {
+      const members = JSON.stringify([...new Set(group.members)].sort((a,b) => a-b));
+      const run = this.msRuns().find(r => !retained.has(r.id) && r.groupMembers && JSON.stringify([...r.groupMembers].sort((a,b) => a-b)) === members);
+      if (run) retained.add(run.id);
+    }
+    return this.files().filter(f => f.runId && !retained.has(f.runId)).length;
+  });
+  groupDisplayName(run: WizardMsRun): string {
+    if (/^Run \d+$/i.test(run.name)) return this.msRuns().length === 1 ? 'All samples' : 'Sample group ' + (this.msRuns().indexOf(run) + 1);
+    const prefixes = this.state().factors.map(factor => factor.name + ': ');
+    return run.name.split(' · ').map(part => {
+      const prefix = prefixes.find(prefix => part.startsWith(prefix));
+      return prefix ? part.slice(prefix.length) : part;
+    }).join(' · ');
+  }
+  startCustomGrouping(): void { this.groupingMode.set('custom'); if (!this.customGroups().length) this.customGroups.set(this.msRuns().map(r => ({ name: this.groupDisplayName(r), members: [...(r.groupMembers || this.separateIndices(r))] }))); }
+  addCustomGroup(): void { this.customGroups.update(groups => [...groups, { name: '', members: [] }]); }
+  removeCustomGroup(index: number): void { this.customGroups.update(groups => groups.filter((_,i) => i !== index)); }
+  renameCustomGroup(index: number, name: string): void { this.customGroups.update(groups => groups.map((g,i) => i === index ? { ...g, name } : g)); }
+  toggleGroupMember(index: number, sample: number, checked: boolean): void { this.customGroups.update(groups => groups.map((g,i) => i === index ? { ...g, members: checked ? [...new Set([...g.members, sample])] : g.members.filter(s => s !== sample) } : g)); }
+  applyGrouping(): void { if (this.groupingMode() === 'factors' && !this.proposedGroups().length) { this.groupingError.set('Select at least one study factor.'); return; } try { this.wizardState.configureSampleGroups(this.proposedGroups()); this.selectedRunId.set(this.msRuns()[0]?.id || null); this.groupingError.set(''); this.samplePickerCi.set(null); } catch(error) { this.groupingError.set(error instanceof Error ? error.message : 'Could not apply groups.'); } }
+
   allSampleIndices(): number[] {
-    return this.state().samples.map(s => s.index);
+    return this.availableGroupSamples().map(s => s.index);
   }
 
   channelSampleNames(ch: WizardChannelAssignment): string[] {
@@ -921,6 +1045,28 @@ export class RunsFilesComponent implements OnInit {
     return this.channelSelectedIndices(ch).includes(sampleIndex);
   }
 
+  sampleName(index: number): string { return this.state().samples.find(s => s.index === index)?.sourceName || ''; }
+  readonly pickerMappingId = signal<string | null>(null);
+  canAssignRowFiles(ch: WizardChannelAssignment): boolean {
+    return ch.role === 'sample' && ch.sampleIndex != null || ch.role === 'pooled' && (ch.pooledSampleIndices?.length ?? 0) >= 2;
+  }
+  openRowFiles(ch: WizardChannelAssignment): void { this.openFilePicker(); this.pickerMappingId.set(ch.mappingId!); }
+  addRow(runId: string): void { this.closeSamplePicker(); this.wizardState.addLabelFreeRow(runId); }
+  removeRow(runId: string, mappingId: string): void { this.closeSamplePicker(); this.wizardState.removeLabelFreeRow(runId, mappingId); }
+
+  separateIndices(run: WizardMsRun): number[] {
+    return run.sampleMappingMode === 'separate' ? run.sampleIndices || [] : [...new Set(run.channels.flatMap(ch => this.channelSelectedIndices(ch)))];
+  }
+  pickerTargetName(): string {
+    const run = this.activeRun(), ch = run?.channels.find(c => c.mappingId === this.pickerMappingId());
+    return ch ? ch.sourceNameOverride || this.channelSampleNames(ch).join(', ') : run?.name || '';
+  }
+  setChannelMode(runId: string, index: number, mode: 'single' | 'pooled'): void {
+    this.endSampleDrag();
+    const ch = this.msRuns().find(r => r.id === runId)?.channels[index]; if (!ch) return;
+    this.wizardState.setChannelAssignment(runId, index, mode === 'pooled' ? { role: 'pooled', pooledSampleIndices: this.channelSelectedIndices(ch) } : { role: 'empty' });
+  }
+
   private applyChannelSamples(
     runId: string,
     channelIndex: number,
@@ -929,6 +1075,11 @@ export class RunsFilesComponent implements OnInit {
   ): void {
     const allowed = new Set(this.allSampleIndices());
     const sorted = [...indices].filter(i => allowed.has(i)).sort((a, b) => a - b);
+    const channel = this.msRuns().find(r => r.id === runId)?.channels[channelIndex];
+    if (channel?.role === 'pooled') {
+      this.wizardState.setChannelAssignment(runId, channelIndex, { role: 'pooled', pooledSampleIndices: sorted, sourceNameOverride: sourceNameOverride || channel.sourceNameOverride }); return;
+    }
+    if (sorted.length > 1) { this.wizardState.setChannelAssignment(runId, channelIndex, { role: 'sample', sampleIndex: sorted[sorted.length - 1] }); return; }
     if (sorted.length === 0) {
       this.wizardState.setChannelAssignment(runId, channelIndex, { role: 'empty' });
       return;
@@ -965,9 +1116,10 @@ export class RunsFilesComponent implements OnInit {
     const run = this.msRuns().find(r => r.id === runId);
     const ch = run?.channels[channelIndex];
     if (!run || !ch) return;
-    const samples = this.state().samples;
+    const samples = this.availableGroupSamples();
     const anchorPos = samples.findIndex(s => s.index === sampleIndex);
     if (anchorPos < 0) return;
+    if (ch.role !== 'pooled') { this.applyChannelSamples(runId, channelIndex, [sampleIndex]); return; }
     const base = new Set(this.channelSelectedIndices(ch));
     const paintOn = !base.has(sampleIndex);
     this.sampleDrag = { runId, channelIndex, paintOn, anchorPos, base };
@@ -977,7 +1129,7 @@ export class RunsFilesComponent implements OnInit {
   paintSampleDrag(runId: string, channelIndex: number, sampleIndex: number): void {
     const drag = this.sampleDrag;
     if (!drag || drag.runId !== runId || drag.channelIndex !== channelIndex) return;
-    const pos = this.state().samples.findIndex(s => s.index === sampleIndex);
+    const pos = this.availableGroupSamples().findIndex(s => s.index === sampleIndex);
     if (pos < 0) return;
     this.applySampleDragRange(pos);
   }
@@ -987,7 +1139,7 @@ export class RunsFilesComponent implements OnInit {
     if (!drag) return;
     const run = this.msRuns().find(r => r.id === drag.runId);
     if (!run) return;
-    const samples = this.state().samples;
+    const samples = this.availableGroupSamples();
     const from = Math.min(drag.anchorPos, toPos);
     const to = Math.max(drag.anchorPos, toPos);
     const next = new Set(drag.base);
@@ -1026,6 +1178,7 @@ export class RunsFilesComponent implements OnInit {
   }
 
   openFilePicker(): void {
+    this.pickerMappingId.set(null);
     this.pickerSelected.set(new Set());
     this.pickerDrag = null;
     this.pickerOpen.set(true);
@@ -1082,7 +1235,8 @@ export class RunsFilesComponent implements OnInit {
   confirmPicker(): void {
     const runId = this.selectedRunId();
     if (!runId || this.pickerSelected().size === 0) return;
-    this.wizardState.assignDataFilesToRun([...this.pickerSelected()], runId);
+    if (this.pickerMappingId()) this.wizardState.assignFilesToLabelFreeRow([...this.pickerSelected()], runId, this.pickerMappingId()!);
+    else this.wizardState.assignDataFilesToRun([...this.pickerSelected()], runId);
     const n = this.pickerSelected().size;
     this.closePicker();
     this.statusError.set(false);
@@ -1208,8 +1362,8 @@ export class RunsFilesComponent implements OnInit {
     this.pxdLoading.set(true);
     this.statusError.set(false);
     try {
-      const { fileNames } = await fetchPrideRawFileNames(accession);
-      this.wizardState.replaceWithUnassignedFileNames(fileNames);
+      const { fileNames, fileUrls } = await fetchPrideRawFileNames(accession);
+      this.wizardState.replaceWithUnassignedFileNames(fileNames, fileUrls);
       this.pasteText.set(fileNames.join('\n'));
       this.statusMsg.set(`${fileNames.length} files loaded into the pool.`);
     } catch (err) {
@@ -1221,7 +1375,7 @@ export class RunsFilesComponent implements OnInit {
   }
 
   applyPaste(append: boolean): void {
-    const lines = this.pasteText().split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const lines = parseFileNameList(this.pasteText());
     if (!lines.length) {
       this.statusError.set(true);
       this.statusMsg.set('Paste at least one filename.');
@@ -1268,6 +1422,16 @@ export class RunsFilesComponent implements OnInit {
   plannedT(): number { return plannedTechRepCount(this.state()); }
   estimatedRows(): number { return estimatePlannerSdrfRows(this.state()); }
   estimatedFiles(): number { return estimatePlannerFileSlots(this.state()); }
+
+  readonly reviewRows = computed(() => buildWizardExpansionRows(this.state()));
+  reviewFileRows(index: number) {
+    const file = this.files()[index];
+    return this.reviewRows().filter(row => row.runId === file.runId && row.fileName === file.fileName);
+  }
+  reviewFileSummary(index: number): string {
+    return this.reviewFileRows(index).map(row => row.label === 'label free sample' ? row.sourceName : `${row.label}: ${row.sourceName}`).join('; ') || '—';
+  }
+  guessAllFractionTech(): void { for (const run of this.msRuns()) this.guessFractionTech(run.id); }
 
   mappingSummary(run: WizardMsRun): string {
     return run.channels.filter(c => c.role !== 'empty').map(c => `${c.label}: ${this.channelSampleNames(c).join(' + ')}`).join('; ');

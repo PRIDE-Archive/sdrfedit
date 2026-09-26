@@ -233,3 +233,44 @@ def test_record_verified_terms_from_search_ontology():
     )
     assert "ncit:c178973" in verified_ids
     assert "roswell park memorial institute 1640 medium" in verified_labels
+
+
+def test_atomic_attribute_edit_verifies_terms_and_normalizes_assignments_together():
+    snapshot = WizardSnapshot(sampleCount=3, characteristicColumns=[
+        CharacteristicColumnInfo(name="characteristics[organism]", ontologies=["ncbitaxon"]),
+    ])
+    action = WizardAction(step="samples", op="applyCharacteristicDraft", args=[
+        "characteristics[organism]",
+        [{"value": "human", "ontologyTerm": {"id": "NCBITaxon:9606", "label": "Homo sapiens"}}],
+        "explicit", ["human", "", "human"],
+    ])
+    kept, rejected = _gate_ontology_actions([action], snapshot, {"ncbitaxon:9606"}, {"homo sapiens"})
+    assert not rejected and len(kept) == 1
+    assert kept[0].args[1][0]["value"] == "Homo sapiens"
+    assert kept[0].args[3] == ["Homo sapiens", "", "Homo sapiens"]
+    kept, rejected = _gate_ontology_actions([action], snapshot, set(), set())
+    assert not kept and rejected
+
+
+def test_atomic_attribute_edit_rejects_mismatched_assignments_and_unknown_columns():
+    snapshot = WizardSnapshot(sampleCount=2, characteristicColumns=["characteristics[age]"])
+    for args in [
+        ["characteristics[age]", [{"value": "10 year"}], "explicit", ["10 year"]],
+        ["characteristics[age]", [{"value": "10 year"}], "explicit", ["10 year", "20 year"]],
+        ["characteristics[age]", [{"value": "10 year"}], "shared", ["10 year", "10 year"]],
+        ["characteristics[invented]", [{"value": "10 year"}], "explicit", ["10 year", ""]],
+        ["characteristics[age]", [{"value": "10 year"}, {"value": "10 year"}], "explicit", ["10 year", ""]],
+    ]:
+        action = WizardAction(step="samples", op="applyCharacteristicDraft", args=args)
+        kept, rejected = _gate_ontology_actions([action], snapshot, set(), set())
+        assert not kept and rejected
+
+
+def test_atomic_attribute_edit_keeps_unassigned_samples_even_with_one_candidate():
+    snapshot = WizardSnapshot(sampleCount=2, characteristicColumns=["characteristics[age]"])
+    action = WizardAction(step="samples", op="applyCharacteristicDraft", args=[
+        "characteristics[age]", [{"value": "10 year"}], "explicit", ["10 year", ""],
+    ])
+    kept, rejected = _gate_ontology_actions([action], snapshot, set(), set())
+    assert not rejected
+    assert kept[0].args[3] == ["10 year", ""]

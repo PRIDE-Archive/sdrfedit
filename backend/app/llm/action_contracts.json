@@ -1,0 +1,472 @@
+{
+  "setTechnologyTemplate": {
+    "parameters": [
+      "name"
+    ],
+    "example": [
+      "ms-proteomics"
+    ],
+    "minArgs": 1
+  },
+  "setLabelConfig": {
+    "parameters": [
+      "name"
+    ],
+    "example": [
+      "lf"
+    ],
+    "minArgs": 1
+  },
+  "setSampleTemplate": {
+    "parameters": [
+      "nullableName"
+    ],
+    "example": [
+      "human"
+    ],
+    "minArgs": 1
+  },
+  "setSampleTemplates": {
+    "parameters": [
+      "names"
+    ],
+    "example": [
+      [
+        "human"
+      ]
+    ],
+    "minArgs": 1,
+    "normalize": "stringList"
+  },
+  "setExperimentTemplates": {
+    "parameters": [
+      "names"
+    ],
+    "example": [
+      [
+        "dia-acquisition"
+      ]
+    ],
+    "minArgs": 1,
+    "normalize": "stringList"
+  },
+  "setSampleCount": {
+    "parameters": [
+      "sampleCount"
+    ],
+    "example": [
+      3
+    ],
+    "minArgs": 1
+  },
+  "setExperimentDescription": {
+    "parameters": [
+      "text"
+    ],
+    "example": [
+      "Experiment description"
+    ],
+    "minArgs": 1
+  },
+  "applyCharacteristicDraft": {
+    "parameters": [
+      "name",
+      "choices",
+      "explicit",
+      "assignments"
+    ],
+    "example": [
+      "characteristics[age]",
+      [
+        {
+          "value": "not available"
+        }
+      ],
+      "explicit",
+      [
+        "not available"
+      ]
+    ],
+    "minArgs": 4
+  },
+  "addCharacteristicChoice": {
+    "parameters": [
+      "name",
+      "name",
+      "optionalTerm"
+    ],
+    "example": [
+      "characteristics[organism]",
+      "Homo sapiens",
+      {
+        "id": "NCBITaxon:9606",
+        "label": "Homo sapiens"
+      }
+    ],
+    "minArgs": 2
+  },
+  "setFactors": {
+    "parameters": [
+      "factors"
+    ],
+    "example": [
+      [
+        {
+          "name": "treatment",
+          "values": [
+            "control",
+            "treated"
+          ],
+          "enabled": true
+        }
+      ]
+    ],
+    "minArgs": 1,
+    "normalize": "objectList"
+  },
+  "addFactor": {
+    "parameters": [
+      "factor"
+    ],
+    "example": [
+      {
+        "name": "treatment",
+        "values": [
+          "control",
+          "treated"
+        ],
+        "enabled": true
+      }
+    ],
+    "minArgs": 1,
+    "normalize": "object"
+  },
+  "setNoStudyFactors": {
+    "parameters": [
+      "name"
+    ],
+    "example": [
+      "No comparison is part of this experiment"
+    ],
+    "minArgs": 1
+  },
+  "setRunFactorValue": {
+    "parameters": [
+      "name",
+      "name",
+      "text"
+    ],
+    "example": [
+      "run_1",
+      "acquisition strategy",
+      "DDA"
+    ],
+    "minArgs": 3
+  },
+  "addFactorValue": {
+    "parameters": [
+      "name",
+      "name"
+    ],
+    "example": [
+      "treatment",
+      "control"
+    ],
+    "minArgs": 2
+  },
+  "setSampleCharacteristicValue": {
+    "parameters": [
+      "index",
+      "name",
+      "text"
+    ],
+    "example": [
+      0,
+      "characteristics[age]",
+      "not available"
+    ],
+    "minArgs": 3
+  },
+  "applyRoundRobin": {
+    "parameters": [
+      "name"
+    ],
+    "example": [
+      "characteristics[treatment]"
+    ],
+    "minArgs": 1
+  },
+  "autoGenerateSourceNames": {
+    "parameters": [
+      "name"
+    ],
+    "example": [
+      "sample_{n}"
+    ],
+    "minArgs": 1
+  },
+  "setSourceNames": {
+    "parameters": [
+      "names"
+    ],
+    "example": [
+      [
+        "sample_1",
+        "sample_2",
+        "sample_3"
+      ]
+    ],
+    "minArgs": 1,
+    "normalize": "stringList"
+  },
+  "setBiologicalReplicates": {
+    "parameters": [
+      "replicates"
+    ],
+    "example": [
+      [
+        1,
+        1,
+        1
+      ]
+    ],
+    "minArgs": 1
+  },
+  "setFactorColumnValues": {
+    "parameters": [
+      "name",
+      "assignments"
+    ],
+    "example": [
+      "treatment",
+      [
+        "control",
+        "treated",
+        ""
+      ]
+    ],
+    "minArgs": 2
+  },
+  "setSampleFactorValue": {
+    "parameters": [
+      "index",
+      "name",
+      "text"
+    ],
+    "example": [
+      0,
+      "treatment",
+      "control"
+    ],
+    "minArgs": 3
+  },
+  "autoPackSamplesIntoRuns": {
+    "parameters": [],
+    "example": [],
+    "minArgs": 0
+  },
+  "applyRunsFilesPlan": {
+    "parameters": [
+      "plan"
+    ],
+    "example": [
+      {
+        "groups": [
+          {
+            "name": "run_1",
+            "labelConfigId": "lf",
+            "channels": [
+              {
+                "label": "label free sample",
+                "sourceName": "sample_1"
+              }
+            ],
+            "files": [
+              {
+                "fileName": "sample.raw",
+                "fractionId": 1,
+                "technicalReplicate": 1
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "minArgs": 1,
+    "normalize": "object"
+  },
+  "replaceWithUnassignedFileNames": {
+    "parameters": [
+      "names",
+      "fileUrls"
+    ],
+    "example": [
+      [
+        "sample.raw"
+      ]
+    ],
+    "minArgs": 1
+  },
+  "assignDataFilesToRun": {
+    "parameters": [
+      "indices",
+      "name"
+    ],
+    "example": [
+      [
+        0
+      ],
+      "run_1"
+    ],
+    "minArgs": 2
+  },
+  "assignFilesToRunsByName": {
+    "parameters": [
+      "namedAssignments"
+    ],
+    "example": [
+      [
+        [
+          "run_1",
+          [
+            [
+              "sample.raw",
+              1,
+              1
+            ]
+          ]
+        ]
+      ]
+    ],
+    "minArgs": 1
+  },
+  "setHasFractions": {
+    "parameters": [
+      "boolean"
+    ],
+    "example": [
+      true
+    ],
+    "minArgs": 1
+  },
+  "setFractionCount": {
+    "parameters": [
+      "positiveInteger"
+    ],
+    "example": [
+      1
+    ],
+    "minArgs": 1
+  },
+  "setTechnicalReplicates": {
+    "parameters": [
+      "positiveInteger"
+    ],
+    "example": [
+      1
+    ],
+    "minArgs": 1
+  },
+  "setAcquisitionMethod": {
+    "parameters": [
+      "acquisition"
+    ],
+    "example": [
+      "dda"
+    ],
+    "minArgs": 1
+  },
+  "setTemplateValue": {
+    "parameters": [
+      "name",
+      "text"
+    ],
+    "example": [
+      "comment[collision energy]",
+      "30"
+    ],
+    "minArgs": 2
+  },
+  "setInstrument": {
+    "parameters": [
+      "term"
+    ],
+    "example": [
+      {
+        "id": "MS:1000556",
+        "label": "LTQ Orbitrap XL",
+        "ontology": "MS"
+      }
+    ],
+    "minArgs": 1,
+    "normalize": "object"
+  },
+  "setCleavageAgent": {
+    "parameters": [
+      "enzyme"
+    ],
+    "example": [
+      {
+        "name": "Trypsin",
+        "msAccession": "MS:1001251"
+      }
+    ],
+    "minArgs": 1,
+    "normalize": "object"
+  },
+  "setModifications": {
+    "parameters": [
+      "modifications"
+    ],
+    "example": [
+      [
+        {
+          "name": "Oxidation",
+          "targetAminoAcids": "M",
+          "type": "variable",
+          "position": "Anywhere",
+          "unimodAccession": "UNIMOD:35"
+        }
+      ]
+    ],
+    "minArgs": 1,
+    "normalize": "objectList"
+  },
+  "setPrecursorMassTolerance": {
+    "parameters": [
+      "tolerance"
+    ],
+    "example": [
+      "10 ppm"
+    ],
+    "minArgs": 1
+  },
+  "setFragmentMassTolerance": {
+    "parameters": [
+      "tolerance"
+    ],
+    "example": [
+      "10 ppm"
+    ],
+    "minArgs": 1
+  },
+  "setProtocolValue": {
+    "parameters": [
+      "name",
+      "protocolValue",
+      "protocolScope"
+    ],
+    "minArgs": 3,
+    "example": [
+      "comment[instrument]",
+      {
+        "id": "MS:1001911",
+        "label": "Q Exactive",
+        "ontology": "MS"
+      },
+      [
+        "file1.raw"
+      ]
+    ]
+  }
+}

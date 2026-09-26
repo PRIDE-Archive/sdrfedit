@@ -114,3 +114,67 @@ it('failed plans never clean up placeholders', () => {
   assert.throws(() => applyRunsFilesPlan(state, plan));
   assert.equal(JSON.stringify(state), before);
 });
+
+
+import { parseFileNameList } from './file-name-list.ts';
+it('parses pasted file names with mixed whitespace, commas and semicolons', () => {
+  assert.deepEqual(parseFileNameList('a.raw b.raw,c.raw;d.raw\te.raw\r\nf.raw，g.raw；h.raw'),
+    ['a.raw', 'b.raw', 'c.raw', 'd.raw', 'e.raw', 'f.raw', 'g.raw', 'h.raw']);
+  assert.deepEqual(parseFileNameList(' , ; \t\n'), []);
+  assert.deepEqual(parseFileNameList('a.raw,,; a.raw\nb.raw'), ['a.raw', 'b.raw']);
+});
+it('preserves separators within double-quoted file names', () => {
+  assert.deepEqual(parseFileNameList('"sample 1.raw", "sample,2.raw";"sample;3.raw"'),
+    ['sample 1.raw', 'sample,2.raw', 'sample;3.raw']);
+});
+
+it('AI plans map label-free files to independent samples and a pool within one group', () => {
+  const { state } = fixture(); state.factors = [];
+  state.samples.push({ ...createDefaultSample(2), sourceName: 'second' });
+  state.dataFiles.push({ fileName: 'pool.raw' });
+  const group = { name: 'All samples', labelConfigId: 'lf', sampleMappingMode: 'rows',
+    channels: [
+      { label: 'label free sample', mappingId: 'a', sourceName: 'shared' },
+      { label: 'label free sample', mappingId: 'b', sourceName: 'second' },
+      { label: 'label free sample', mappingId: 'pool', pooledSourceNames: ['shared', 'second'] },
+    ],
+    files: state.dataFiles.map((f, i) => ({ ...f, mappingId: ['a', 'b', 'pool'][i], fractionId: 1, technicalReplicate: 1 })),
+  };
+  const next = applyRunsFilesPlan(state, { groups: [group] });
+  assert.equal(validateRunsAndFiles(next), true);
+  const rows = buildWizardExpansionRows(next);
+  assert.equal(rows.length, 3);
+  assert.equal(rows[0].sourceName, 'shared');
+  assert.equal(rows[1].sourceName, 'second');
+  assert.match(rows[2].sourceName, /shared/);
+  assert.match(rows[2].sourceName, /second/);
+  assert.deepEqual(applyRunsFilesPlan(next, { groups: [group] }), next);
+  for (const mutate of [
+    g => g.files[0].mappingId = 'missing',
+    g => g.channels[1].mappingId = 'a',
+    g => g.channels[2].pooledSourceNames = ['shared', 'shared'],
+    g => g.labelConfigId = 'tmt6',
+  ]) {
+    const invalid = structuredClone(group); mutate(invalid);
+    const before = JSON.stringify(next);
+    assert.throws(() => applyRunsFilesPlan(next, { groups: [invalid] }));
+    assert.equal(JSON.stringify(next), before);
+  }
+});
+
+it('AI shared-channel plans support pooled multiplex channels and clear stale file mapping', () => {
+  const { state } = fixture(); state.factors = [];
+  state.samples.push({ ...createDefaultSample(2), sourceName: 'second' });
+  state.dataFiles[0].mappingId = 'old-row';
+  state.dataFiles[0].sampleIndex = 1;
+  const next = applyRunsFilesPlan(state, { groups: [{
+    name: 'plex', labelConfigId: 'tmt6',
+    channels: [{ label: 'TMT126', pooledSourceNames: ['shared', 'second'] }],
+    files: state.dataFiles.map(f => ({ fileName: f.fileName, fractionId: 1, technicalReplicate: 1 })),
+  }] });
+  assert.equal(validateRunsAndFiles(next), true);
+  assert.equal(next.dataFiles[0].mappingId, undefined);
+  assert.equal(next.dataFiles[0].sampleIndex, undefined);
+  assert.deepEqual(next.msRuns[0].sampleIndices, [1, 2]);
+  assert.equal(buildWizardExpansionRows(next).length, 2);
+});

@@ -1,3 +1,5 @@
+import { actionHistoryFeedback } from '../../core/services/assistant/action-history';
+import { effectiveTurnCards } from '../../core/utils/auto-annotation';
 /**
  * Wizard AI Assistant Panel
  *
@@ -54,8 +56,10 @@ import {
   WizardActionError,
   WizardAiBridgeService,
 } from '../../core/services/assistant/wizard-ai-bridge.service';
+import { biologicalReplicateContract } from '../../core/services/assistant/wizard-action-args';
 import { WizardAutoAnnotationService } from '../../core/services/assistant/wizard-auto-annotation.service';
-import { type AutoTurn } from '../../core/utils/auto-annotation';
+import { orderAutoCards, type AutoTurn } from '../../core/utils/auto-annotation';
+import { buildActionRepairPrompt } from '../../core/services/assistant/wizard-action-repair';
 import { WizardStateService } from '../../core/services/wizard-state.service';
 import { resolveAssistantNavigation } from '../../core/utils/wizard-navigation';
 import { ActionCardListComponent } from './action-card-list.component';
@@ -449,7 +453,7 @@ const DEFAULT_WIDTH = 400;
                   @if (message.nextStep && !message.pending) {
                     <div class="next-bar">
                       <span class="next-text">
-                        Next: step {{ message.nextStep.index + 1 }}, {{ message.nextStep.title }}
+                        Next: {{ nextStepTitle(message.nextStep) }}
                       </span>
                       <button class="next-btn" [disabled]="busy() || !wizardState.canProceed()" (click)="goNext(message.nextStep)">
                         Continue &rarr;
@@ -1643,6 +1647,11 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
       wizardSnapshot: this.bridge.buildSnapshot(),
       health: this.api.health(),
       cardSequence: this.cardSequence,
+      automation: {
+        status: this.autoAnnotation.status(), progress: this.autoAnnotation.progress(),
+        issues: this.autoAnnotation.issues(), notes: this.autoAnnotation.notes(),
+        warnings: this.autoAnnotation.warnings(),
+      },
       messages: this._messages().map(message => ({
         role: message.role,
         content: message.content,
@@ -1657,6 +1666,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
         nextStep: message.nextStep,
         actionIds: message.actionIds,
         trace: message.trace,
+        automation: message.automation,
         timeline: message.timeline,
         toolCalls: message.toolCalls,
       })),
@@ -1994,14 +2004,50 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
         if (!result) throw new Error('Could not start automatic assistant turn.');
         return result;
       },
-      record: (cards, applied, error) => {
+      repair: async (request, runId) => {
+        if (generation !== this.viewGeneration) throw new Error('Conversation changed.');
+        const result = await this.send(buildActionRepairPrompt(request), {
+          focusStep: request.card.action.step, mode: 'step', auto: true,
+          autoLabel: `Auto repair · ${request.card.action.label} · attempt ${request.attempt}/2`,
+          skill, accession, automationRunId: runId,
+        });
+        if (!result) throw new Error('Could not start automatic card repair.');
+        return result;
+      },
+      repairEvent: event => {
         if (generation !== this.viewGeneration) return;
         this._cards.update(map => {
           const next = { ...map };
-          for (const card of cards) next[card.id] = {
-            ...card, status: applied ? 'applied' : 'failed', autoApplied: applied,
-            error, // Keep the before/after preview captured before this batch.
+          const original = next[event.request.card.id];
+          if (original) next[original.id] = {
+            ...original,
+            ...(event.status === 'accepted' ? { status: 'dismissed' as const, executionState: 'superseded' as const,
+              replacedByCardId: event.replacements[0].id } : {}),
+            repairHistory: [...(original.repairHistory || []), { attempt: event.request.attempt,
+              status: event.status, message: event.message, replacementIds: event.replacements.map(c => c.id) }],
           };
+          for (const card of event.replacements) next[card.id] = {
+            ...(next[card.id] || card), replacesCardId: event.request.card.id,
+            ...(event.status === 'rejected' ? { status: 'dismissed' as const,
+              executionState: 'repair-rejected' as const, error: event.message } : {}),
+          };
+          return next;
+        });
+        this.persistActive();
+      },
+      record: (cards, applied, error, failure) => {
+        if (generation !== this.viewGeneration) return;
+        this._cards.update(map => {
+          const next = { ...map };
+          for (const card of cards) {
+            const isFailure = !applied && (!failure || failure.failedCardId === card.id);
+            const executionState = applied || isFailure ? undefined
+              : failure!.attemptedIds.includes(card.id) ? 'rolled-back' as const : 'not-executed' as const;
+            next[card.id] = {
+              ...(next[card.id] || card), status: applied ? 'applied' : isFailure ? 'failed' : 'pending', autoApplied: applied,
+              executionState, error: applied ? undefined : error,
+            };
+          }
           return next;
         });
         this.persistActive();
@@ -2042,20 +2088,30 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
   }
 
   /** The "Continue" button under a turn: move the wizard on, then advise. */
+  nextStepIndex(hint: AssistantNextStep): number {
+    const id = hint.stepId === 'characteristics' ? 'samples' : hint.stepId;
+    return WIZARD_STEPS.findIndex(step => step.id === id);
+  }
+
+  nextStepTitle(hint: AssistantNextStep): string {
+    return WIZARD_STEPS[this.nextStepIndex(hint)]?.title || hint.title;
+  }
+
   goNext(hint: AssistantNextStep): void {
     if (this.autoAnnotation.active()) return;
+    const targetStep = this.nextStepIndex(hint);
     const currentStep = this.wizardState.currentStep();
     const decision = resolveAssistantNavigation(
       currentStep,
-      hint.index,
+      targetStep,
       this.wizardState.canProceed(),
       this.totalSteps
     );
     if (decision === 'stay') return;
     if (decision === 'next') this.wizardState.nextStep();
-    else this.wizardState.goToStep(hint.index);
+    else this.wizardState.goToStep(targetStep);
     // The step effect picks the new step up, unless it was already advised.
-    void this.adviseStep(hint.index);
+    void this.adviseStep(targetStep);
   }
 
   private onStepChanged(step: number): void {
@@ -2177,16 +2233,25 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
     this.markAdvised(stepIndex);
     this.scrollToBottom();
 
+    const snapshot = this.bridge.buildSnapshot();
     const chatHistory = this._messages()
       .filter(message => !message.pending)
-      .map(message => ({ role: message.role, content: message.content }))
+      .map(message => {
+        const cards = (message.actionIds || []).map(id => this._cards()[id]).filter(Boolean);
+        const feedback = cards.length ? '\n\nAction execution feedback (application state):\n' + JSON.stringify(
+          cards.map(card => options.automationRunId
+            ? actionHistoryFeedback(card, snapshot)
+            : { op: card.action.op, args: card.action.args, status: card.status, error: card.error })
+        ) : '';
+        return { role: message.role, content: message.content + feedback };
+      })
       .filter(message => message.content);
 
     try {
       const stream = this.api.streamChat({
         sessionId: this.sessionId,
         messages: chatHistory,
-        wizardState: this.bridge.buildSnapshot(!!options.automationRunId),
+        wizardState: snapshot,
         accession: options.accession ?? slash?.accession ?? this.wizardState.getState().projectAccession ?? this.accession(),
         focusStep,
         mode: options.mode || 'chat',
@@ -2295,6 +2360,14 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
     this._cards.update(map => {
       const next = { ...map };
       for (const card of created) next[card.id] = card;
+      const message = this._messages().at(-1);
+      const turnCards = [...(message?.role === 'assistant' ? message.actionIds || [] : []), ...created.map(c => c.id)]
+        .map(id => next[id]).filter(card => card?.status === 'pending');
+      const retained = new Set(effectiveTurnCards(turnCards).map(card => card.id));
+      for (const card of turnCards) {
+        if (!retained.has(card.id)) next[card.id] = { ...card, status: 'dismissed', executionState: 'superseded',
+          error: 'Replaced by the latest factor definition in this response.' };
+      }
       return next;
     });
     this.patchLast(message => ({
@@ -2372,15 +2445,18 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
 
   async apply(card: WizardActionCard): Promise<void> {
     if (this.applyingCard || this.autoAnnotation.active()) return;
+    if (card.executionState === 'superseded' || card.executionState === 'repair-rejected') return;
     if (card.status === 'failed') {
-      await this.send(`Repair the failed suggestion "${card.action.label}" using the CURRENT wizard snapshot. Error: ${card.error || 'application failed'}. Original action: ${JSON.stringify(card.action)}. Propose a corrected plan; do not repeat references to missing groups.`, { focusStep: card.action.step });
+      const contract = card.action.op === 'setBiologicalReplicates'
+        ? biologicalReplicateContract(this.wizardState.getState().sampleCount) : '';
+      await this.send(`Repair the failed suggestion "${card.action.label}" using the CURRENT wizard snapshot. Error: ${card.error || 'application failed'}. Original action: ${JSON.stringify(card.action)}. ${contract} Propose a corrected plan; do not repeat references to missing groups.`, { focusStep: card.action.step });
       return;
     }
     this.applyingCard = true;
     const preview = this.bridge.previewAction(card.action);
     try {
       await this.bridge.applyAction(card.action);
-      this.updateCard(card.id, { status: 'applied', preview, error: undefined });
+      this.updateCard(card.id, { status: 'applied', preview, error: undefined, executionState: undefined });
       this.autoAnnotation.recordManualApplication(card.action.step,
         !Object.values(this._cards()).some(other => other.action.step === card.action.step
           && (other.status === 'pending' || other.status === 'failed')));
@@ -2389,7 +2465,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
         error instanceof WizardActionError || error instanceof Error
           ? error.message
           : 'Could not apply this suggestion.';
-      this.updateCard(card.id, { status: 'failed', preview, error: message });
+      this.updateCard(card.id, { status: 'failed', preview, error: message, executionState: undefined });
     } finally {
       this.applyingCard = false;
     }
@@ -2421,7 +2497,7 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
   }
 
   async applyMany(cards: WizardActionCard[]): Promise<void> {
-    for (const card of cards) {
+    for (const card of orderAutoCards(cards)) {
       if (this._cards()[card.id]?.status === 'pending') await this.apply(card);
       if (this._cards()[card.id]?.status === 'failed') break;
     }

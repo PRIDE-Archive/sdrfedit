@@ -1,0 +1,1355 @@
+[
+  {
+    "name": "documented setTechnologyTemplate",
+    "op": "setTechnologyTemplate",
+    "args": [
+      "ms-proteomics"
+    ],
+    "valid": true,
+    "expected": [
+      "ms-proteomics"
+    ]
+  },
+  {
+    "name": "documented setLabelConfig",
+    "op": "setLabelConfig",
+    "args": [
+      "lf"
+    ],
+    "valid": true,
+    "expected": [
+      "lf"
+    ]
+  },
+  {
+    "name": "documented setSampleTemplate",
+    "op": "setSampleTemplate",
+    "args": [
+      "human"
+    ],
+    "valid": true,
+    "expected": [
+      "human"
+    ]
+  },
+  {
+    "name": "documented setSampleTemplates",
+    "op": "setSampleTemplates",
+    "args": [
+      [
+        "human"
+      ]
+    ],
+    "valid": true,
+    "expected": [
+      [
+        "human"
+      ]
+    ]
+  },
+  {
+    "name": "documented setExperimentTemplates",
+    "op": "setExperimentTemplates",
+    "args": [
+      [
+        "dia-acquisition"
+      ]
+    ],
+    "valid": true,
+    "expected": [
+      [
+        "dia-acquisition"
+      ]
+    ]
+  },
+  {
+    "name": "documented setSampleCount",
+    "op": "setSampleCount",
+    "args": [
+      3
+    ],
+    "valid": true,
+    "expected": [
+      3
+    ]
+  },
+  {
+    "name": "documented setExperimentDescription",
+    "op": "setExperimentDescription",
+    "args": [
+      "Experiment description"
+    ],
+    "valid": true,
+    "expected": [
+      "Experiment description"
+    ]
+  },
+  {
+    "name": "documented applyCharacteristicDraft",
+    "op": "applyCharacteristicDraft",
+    "args": [
+      "characteristics[age]",
+      [
+        {
+          "value": "not available"
+        }
+      ],
+      "explicit",
+      [
+        "not available"
+      ]
+    ],
+    "valid": true,
+    "expected": [
+      "characteristics[age]",
+      [
+        {
+          "value": "not available"
+        }
+      ],
+      "explicit",
+      [
+        "not available"
+      ]
+    ]
+  },
+  {
+    "name": "documented addCharacteristicChoice",
+    "op": "addCharacteristicChoice",
+    "args": [
+      "characteristics[organism]",
+      "Homo sapiens",
+      {
+        "id": "NCBITaxon:9606",
+        "label": "Homo sapiens"
+      }
+    ],
+    "valid": true,
+    "expected": [
+      "characteristics[organism]",
+      "Homo sapiens",
+      {
+        "id": "NCBITaxon:9606",
+        "label": "Homo sapiens"
+      }
+    ]
+  },
+  {
+    "name": "documented setFactors",
+    "op": "setFactors",
+    "args": [
+      [
+        {
+          "name": "treatment",
+          "values": [
+            "control",
+            "treated"
+          ],
+          "enabled": true
+        }
+      ]
+    ],
+    "valid": true,
+    "expected": [
+      [
+        {
+          "name": "treatment",
+          "values": [
+            "control",
+            "treated"
+          ],
+          "enabled": true
+        }
+      ]
+    ]
+  },
+  {
+    "name": "documented addFactor",
+    "op": "addFactor",
+    "args": [
+      {
+        "name": "treatment",
+        "values": [
+          "control",
+          "treated"
+        ],
+        "enabled": true
+      }
+    ],
+    "valid": true,
+    "expected": [
+      {
+        "name": "treatment",
+        "values": [
+          "control",
+          "treated"
+        ],
+        "enabled": true
+      }
+    ]
+  },
+  {
+    "name": "documented setNoStudyFactors",
+    "op": "setNoStudyFactors",
+    "args": [
+      "No comparison is part of this experiment"
+    ],
+    "valid": true,
+    "expected": [
+      "No comparison is part of this experiment"
+    ]
+  },
+  {
+    "name": "documented setRunFactorValue",
+    "op": "setRunFactorValue",
+    "args": [
+      "run_1",
+      "acquisition strategy",
+      "DDA"
+    ],
+    "valid": true,
+    "expected": [
+      "run_1",
+      "acquisition strategy",
+      "DDA"
+    ]
+  },
+  {
+    "name": "documented addFactorValue",
+    "op": "addFactorValue",
+    "args": [
+      "treatment",
+      "control"
+    ],
+    "valid": true,
+    "expected": [
+      "treatment",
+      "control"
+    ]
+  },
+  {
+    "name": "documented setSampleCharacteristicValue",
+    "op": "setSampleCharacteristicValue",
+    "args": [
+      0,
+      "characteristics[age]",
+      "not available"
+    ],
+    "valid": true,
+    "expected": [
+      0,
+      "characteristics[age]",
+      "not available"
+    ]
+  },
+  {
+    "name": "documented applyRoundRobin",
+    "op": "applyRoundRobin",
+    "args": [
+      "characteristics[treatment]"
+    ],
+    "valid": true,
+    "expected": [
+      "characteristics[treatment]"
+    ]
+  },
+  {
+    "name": "documented autoGenerateSourceNames",
+    "op": "autoGenerateSourceNames",
+    "args": [
+      "sample_{n}"
+    ],
+    "valid": true,
+    "expected": [
+      "sample_{n}"
+    ]
+  },
+  {
+    "name": "documented setSourceNames",
+    "op": "setSourceNames",
+    "args": [
+      [
+        "sample_1",
+        "sample_2",
+        "sample_3"
+      ]
+    ],
+    "valid": true,
+    "expected": [
+      [
+        "sample_1",
+        "sample_2",
+        "sample_3"
+      ]
+    ]
+  },
+  {
+    "name": "documented setBiologicalReplicates",
+    "op": "setBiologicalReplicates",
+    "args": [
+      [
+        1,
+        1,
+        1
+      ]
+    ],
+    "valid": true,
+    "expected": [
+      [
+        1,
+        1,
+        1
+      ]
+    ]
+  },
+  {
+    "name": "documented setFactorColumnValues",
+    "op": "setFactorColumnValues",
+    "args": [
+      "treatment",
+      [
+        "control",
+        "treated",
+        ""
+      ]
+    ],
+    "valid": true,
+    "expected": [
+      "treatment",
+      [
+        "control",
+        "treated",
+        ""
+      ]
+    ]
+  },
+  {
+    "name": "documented setSampleFactorValue",
+    "op": "setSampleFactorValue",
+    "args": [
+      0,
+      "treatment",
+      "control"
+    ],
+    "valid": true,
+    "expected": [
+      0,
+      "treatment",
+      "control"
+    ]
+  },
+  {
+    "name": "documented autoPackSamplesIntoRuns",
+    "op": "autoPackSamplesIntoRuns",
+    "args": [],
+    "valid": true,
+    "expected": []
+  },
+  {
+    "name": "documented applyRunsFilesPlan",
+    "op": "applyRunsFilesPlan",
+    "args": [
+      {
+        "groups": [
+          {
+            "name": "run_1",
+            "labelConfigId": "lf",
+            "channels": [
+              {
+                "label": "label free sample",
+                "sourceName": "sample_1"
+              }
+            ],
+            "files": [
+              {
+                "fileName": "sample.raw",
+                "fractionId": 1,
+                "technicalReplicate": 1
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "valid": true,
+    "expected": [
+      {
+        "groups": [
+          {
+            "name": "run_1",
+            "labelConfigId": "lf",
+            "channels": [
+              {
+                "label": "label free sample",
+                "sourceName": "sample_1"
+              }
+            ],
+            "files": [
+              {
+                "fileName": "sample.raw",
+                "fractionId": 1,
+                "technicalReplicate": 1
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "documented replaceWithUnassignedFileNames",
+    "op": "replaceWithUnassignedFileNames",
+    "args": [
+      [
+        "sample.raw"
+      ]
+    ],
+    "valid": true,
+    "expected": [
+      [
+        "sample.raw"
+      ]
+    ]
+  },
+  {
+    "name": "documented assignDataFilesToRun",
+    "op": "assignDataFilesToRun",
+    "args": [
+      [
+        0
+      ],
+      "run_1"
+    ],
+    "valid": true,
+    "expected": [
+      [
+        0
+      ],
+      "run_1"
+    ]
+  },
+  {
+    "name": "documented assignFilesToRunsByName",
+    "op": "assignFilesToRunsByName",
+    "args": [
+      [
+        [
+          "run_1",
+          [
+            [
+              "sample.raw",
+              1,
+              1
+            ]
+          ]
+        ]
+      ]
+    ],
+    "valid": true,
+    "expected": [
+      [
+        [
+          "run_1",
+          [
+            [
+              "sample.raw",
+              1,
+              1
+            ]
+          ]
+        ]
+      ]
+    ]
+  },
+  {
+    "name": "documented setHasFractions",
+    "op": "setHasFractions",
+    "args": [
+      true
+    ],
+    "valid": true,
+    "expected": [
+      true
+    ]
+  },
+  {
+    "name": "documented setFractionCount",
+    "op": "setFractionCount",
+    "args": [
+      1
+    ],
+    "valid": true,
+    "expected": [
+      1
+    ]
+  },
+  {
+    "name": "documented setTechnicalReplicates",
+    "op": "setTechnicalReplicates",
+    "args": [
+      1
+    ],
+    "valid": true,
+    "expected": [
+      1
+    ]
+  },
+  {
+    "name": "documented setAcquisitionMethod",
+    "op": "setAcquisitionMethod",
+    "args": [
+      "dda"
+    ],
+    "valid": true,
+    "expected": [
+      "dda"
+    ]
+  },
+  {
+    "name": "documented setTemplateValue",
+    "op": "setTemplateValue",
+    "args": [
+      "comment[collision energy]",
+      "30"
+    ],
+    "valid": true,
+    "expected": [
+      "comment[collision energy]",
+      "30"
+    ]
+  },
+  {
+    "name": "documented setInstrument",
+    "op": "setInstrument",
+    "args": [
+      {
+        "id": "MS:1000556",
+        "label": "LTQ Orbitrap XL",
+        "ontology": "MS"
+      }
+    ],
+    "valid": true,
+    "expected": [
+      {
+        "id": "MS:1000556",
+        "label": "LTQ Orbitrap XL",
+        "ontology": "MS"
+      }
+    ]
+  },
+  {
+    "name": "documented setCleavageAgent",
+    "op": "setCleavageAgent",
+    "args": [
+      {
+        "name": "Trypsin",
+        "msAccession": "MS:1001251"
+      }
+    ],
+    "valid": true,
+    "expected": [
+      {
+        "name": "Trypsin",
+        "msAccession": "MS:1001251"
+      }
+    ]
+  },
+  {
+    "name": "documented setModifications",
+    "op": "setModifications",
+    "args": [
+      [
+        {
+          "name": "Oxidation",
+          "targetAminoAcids": "M",
+          "type": "variable",
+          "position": "Anywhere",
+          "unimodAccession": "UNIMOD:35"
+        }
+      ]
+    ],
+    "valid": true,
+    "expected": [
+      [
+        {
+          "name": "Oxidation",
+          "targetAminoAcids": "M",
+          "type": "variable",
+          "position": "Anywhere",
+          "unimodAccession": "UNIMOD:35"
+        }
+      ]
+    ]
+  },
+  {
+    "name": "documented setPrecursorMassTolerance",
+    "op": "setPrecursorMassTolerance",
+    "args": [
+      "10 ppm"
+    ],
+    "valid": true,
+    "expected": [
+      "10 ppm"
+    ]
+  },
+  {
+    "name": "documented setFragmentMassTolerance",
+    "op": "setFragmentMassTolerance",
+    "args": [
+      "10 ppm"
+    ],
+    "valid": true,
+    "expected": [
+      "10 ppm"
+    ]
+  },
+  {
+    "name": "flat names",
+    "op": "setSourceNames",
+    "args": [
+      "a",
+      "b"
+    ],
+    "valid": true,
+    "expected": [
+      [
+        "a",
+        "b"
+      ]
+    ],
+    "sampleCount": 2
+  },
+  {
+    "name": "nested enzyme",
+    "op": "setCleavageAgent",
+    "args": [
+      [
+        {
+          "name": "Trypsin",
+          "msAccession": "MS:1001251"
+        }
+      ]
+    ],
+    "valid": true,
+    "expected": [
+      {
+        "name": "Trypsin",
+        "msAccession": "MS:1001251"
+      }
+    ]
+  },
+  {
+    "name": "flat modifications",
+    "op": "setModifications",
+    "args": [
+      {
+        "name": "Oxidation",
+        "type": "variable",
+        "position": "Anywhere",
+        "targetAminoAcids": "M"
+      }
+    ],
+    "valid": true,
+    "expected": [
+      [
+        {
+          "name": "Oxidation",
+          "type": "variable",
+          "position": "Anywhere",
+          "targetAminoAcids": "M"
+        }
+      ]
+    ]
+  },
+  {
+    "name": "flat factors",
+    "op": "setFactors",
+    "args": [
+      {
+        "name": "treatment",
+        "values": [
+          "control"
+        ]
+      }
+    ],
+    "valid": true,
+    "expected": [
+      [
+        {
+          "name": "treatment",
+          "values": [
+            "control"
+          ]
+        }
+      ]
+    ]
+  },
+  {
+    "name": "flat filenames",
+    "op": "replaceWithUnassignedFileNames",
+    "args": [
+      "a.raw",
+      "b.raw"
+    ],
+    "valid": true,
+    "expected": [
+      [
+        "a.raw",
+        "b.raw"
+      ]
+    ]
+  },
+  {
+    "name": "blank positions preserved",
+    "op": "setFactorColumnValues",
+    "args": [
+      "treatment",
+      [
+        "control",
+        "",
+        "treated"
+      ]
+    ],
+    "valid": true,
+    "expected": [
+      "treatment",
+      [
+        "control",
+        "",
+        "treated"
+      ]
+    ],
+    "sampleCount": 3
+  },
+  {
+    "name": "reject wrong original length",
+    "op": "setFactorColumnValues",
+    "args": [
+      "treatment",
+      [
+        "control",
+        "",
+        "treated",
+        "control"
+      ]
+    ],
+    "valid": false,
+    "sampleCount": 3
+  },
+  {
+    "name": "extra template list",
+    "op": "setSampleTemplates",
+    "args": [
+      [
+        "human"
+      ],
+      [
+        "cell-lines"
+      ]
+    ],
+    "valid": false
+  },
+  {
+    "name": "extra scalar argument",
+    "op": "setAcquisitionMethod",
+    "args": [
+      "dda",
+      "dia"
+    ],
+    "valid": false
+  },
+  {
+    "name": "extra file argument",
+    "op": "replaceWithUnassignedFileNames",
+    "args": [
+      [
+        "a.raw"
+      ],
+      {},
+      "b.raw"
+    ],
+    "valid": false
+  },
+  {
+    "name": "duplicate names",
+    "op": "setSourceNames",
+    "args": [
+      [
+        "same",
+        "same"
+      ]
+    ],
+    "valid": false,
+    "sampleCount": 2
+  },
+  {
+    "name": "blank name",
+    "op": "setSourceNames",
+    "args": [
+      [
+        "a",
+        ""
+      ]
+    ],
+    "valid": false,
+    "sampleCount": 2
+  },
+  {
+    "name": "constant naming pattern",
+    "op": "autoGenerateSourceNames",
+    "args": [
+      "constant"
+    ],
+    "valid": false,
+    "sampleCount": 2
+  },
+  {
+    "name": "valid naming pattern",
+    "op": "autoGenerateSourceNames",
+    "args": [
+      "sample_{n}"
+    ],
+    "valid": true,
+    "sampleCount": 3
+  },
+  {
+    "name": "index out of range",
+    "op": "setSampleFactorValue",
+    "args": [
+      99,
+      "treatment",
+      "control"
+    ],
+    "valid": false,
+    "sampleCount": 3
+  },
+  {
+    "name": "bad index None",
+    "op": "setSampleFactorValue",
+    "args": [
+      null,
+      "treatment",
+      "control"
+    ],
+    "valid": false,
+    "sampleCount": 3
+  },
+  {
+    "name": "bad index True",
+    "op": "setSampleFactorValue",
+    "args": [
+      true,
+      "treatment",
+      "control"
+    ],
+    "valid": false,
+    "sampleCount": 3
+  },
+  {
+    "name": "bad index False",
+    "op": "setSampleFactorValue",
+    "args": [
+      false,
+      "treatment",
+      "control"
+    ],
+    "valid": false,
+    "sampleCount": 3
+  },
+  {
+    "name": "bad index ''",
+    "op": "setSampleFactorValue",
+    "args": [
+      "",
+      "treatment",
+      "control"
+    ],
+    "valid": false,
+    "sampleCount": 3
+  },
+  {
+    "name": "bad index []",
+    "op": "setSampleFactorValue",
+    "args": [
+      [],
+      "treatment",
+      "control"
+    ],
+    "valid": false,
+    "sampleCount": 3
+  },
+  {
+    "name": "bad index [2]",
+    "op": "setSampleFactorValue",
+    "args": [
+      [
+        2
+      ],
+      "treatment",
+      "control"
+    ],
+    "valid": false,
+    "sampleCount": 3
+  },
+  {
+    "name": "bad index 1.9",
+    "op": "setSampleFactorValue",
+    "args": [
+      1.9,
+      "treatment",
+      "control"
+    ],
+    "valid": false,
+    "sampleCount": 3
+  },
+  {
+    "name": "bad index -1",
+    "op": "setSampleFactorValue",
+    "args": [
+      -1,
+      "treatment",
+      "control"
+    ],
+    "valid": false,
+    "sampleCount": 3
+  },
+  {
+    "name": "bad index 9007199254740992",
+    "op": "setSampleFactorValue",
+    "args": [
+      9007199254740992,
+      "treatment",
+      "control"
+    ],
+    "valid": false,
+    "sampleCount": 3
+  },
+  {
+    "name": "bad positive count None",
+    "op": "setTechnicalReplicates",
+    "args": [
+      null
+    ],
+    "valid": false
+  },
+  {
+    "name": "bad positive count True",
+    "op": "setTechnicalReplicates",
+    "args": [
+      true
+    ],
+    "valid": false
+  },
+  {
+    "name": "bad positive count 0",
+    "op": "setTechnicalReplicates",
+    "args": [
+      0
+    ],
+    "valid": false
+  },
+  {
+    "name": "bad positive count -1",
+    "op": "setTechnicalReplicates",
+    "args": [
+      -1
+    ],
+    "valid": false
+  },
+  {
+    "name": "bad positive count 2.9",
+    "op": "setTechnicalReplicates",
+    "args": [
+      2.9
+    ],
+    "valid": false
+  },
+  {
+    "name": "bad positive count '2'",
+    "op": "setTechnicalReplicates",
+    "args": [
+      "2"
+    ],
+    "valid": false
+  },
+  {
+    "name": "factor enabled string",
+    "op": "addFactor",
+    "args": [
+      {
+        "name": "treatment",
+        "enabled": "false"
+      }
+    ],
+    "valid": false
+  },
+  {
+    "name": "factor numeric candidate",
+    "op": "addFactor",
+    "args": [
+      {
+        "name": "dose",
+        "values": [
+          "control",
+          5
+        ]
+      }
+    ],
+    "valid": false
+  },
+  {
+    "name": "factor invalid source",
+    "op": "addFactor",
+    "args": [
+      {
+        "name": "dose",
+        "sourceCharacteristic": []
+      }
+    ],
+    "valid": false
+  },
+  {
+    "name": "modification object target",
+    "op": "setModifications",
+    "args": [
+      [
+        {
+          "name": "x",
+          "targetAminoAcids": {}
+        }
+      ]
+    ],
+    "valid": false
+  },
+  {
+    "name": "modification string mass",
+    "op": "setModifications",
+    "args": [
+      [
+        {
+          "name": "x",
+          "deltaMass": "5"
+        }
+      ]
+    ],
+    "valid": false
+  },
+  {
+    "name": "modification unknown mass",
+    "op": "setModifications",
+    "args": [
+      [
+        {
+          "name": "x",
+          "deltaMass": null,
+          "targetAminoAcids": "M"
+        }
+      ]
+    ],
+    "valid": true
+  },
+  {
+    "name": "nested optional term",
+    "op": "addCharacteristicChoice",
+    "args": [
+      "characteristics[organism]",
+      "human",
+      [
+        {
+          "id": "x",
+          "label": "human"
+        }
+      ]
+    ],
+    "valid": false
+  },
+  {
+    "name": "bad ontology metadata",
+    "op": "setInstrument",
+    "args": [
+      {
+        "id": "MS:1",
+        "label": "instrument",
+        "ontology": []
+      }
+    ],
+    "valid": false
+  },
+  {
+    "name": "bad URL mapping",
+    "op": "replaceWithUnassignedFileNames",
+    "args": [
+      [
+        "a.raw"
+      ],
+      {
+        "a.raw": 5
+      }
+    ],
+    "valid": false
+  },
+  {
+    "name": "legacy extra tuple",
+    "op": "assignFilesToRunsByName",
+    "args": [
+      [
+        [
+          "run",
+          [
+            [
+              "a.raw",
+              1,
+              1,
+              "ignored"
+            ]
+          ]
+        ]
+      ]
+    ],
+    "valid": false
+  },
+  {
+    "name": "legacy fractional repeat",
+    "op": "assignFilesToRunsByName",
+    "args": [
+      [
+        [
+          "run",
+          [
+            [
+              "a.raw",
+              1,
+              2.9
+            ]
+          ]
+        ]
+      ]
+    ],
+    "valid": false
+  },
+  {
+    "name": "legacy explicit null fraction",
+    "op": "assignFilesToRunsByName",
+    "args": [
+      [
+        [
+          "run",
+          [
+            [
+              "a.raw",
+              null,
+              1
+            ]
+          ]
+        ]
+      ]
+    ],
+    "valid": false
+  },
+  {
+    "name": "legacy omitted defaults",
+    "op": "assignFilesToRunsByName",
+    "args": [
+      [
+        [
+          "run",
+          [
+            [
+              "a.raw"
+            ]
+          ]
+        ]
+      ]
+    ],
+    "valid": true
+  },
+  {
+    "name": "empty plan",
+    "op": "applyRunsFilesPlan",
+    "args": [
+      {
+        "groups": []
+      }
+    ],
+    "valid": false
+  },
+  {
+    "name": "numeric text not coerced",
+    "op": "setTemplateValue",
+    "args": [
+      "comment[x]",
+      5
+    ],
+    "valid": false
+  },
+  {
+    "name": "biological reps no flatten",
+    "op": "setBiologicalReplicates",
+    "args": [
+      1,
+      1,
+      1
+    ],
+    "valid": false,
+    "sampleCount": 3
+  },
+  {
+    "name": "documented setProtocolValue",
+    "op": "setProtocolValue",
+    "args": [
+      "comment[instrument]",
+      {
+        "id": "MS:1001911",
+        "label": "Q Exactive",
+        "ontology": "MS"
+      },
+      [
+        "file1.raw"
+      ]
+    ],
+    "valid": true
+  },
+  {
+    "name": "all instruments",
+    "op": "setProtocolValue",
+    "args": [
+      "comment[instrument]",
+      {
+        "id": "MS:1001911",
+        "label": "Q Exactive"
+      },
+      "all"
+    ],
+    "valid": true
+  },
+  {
+    "name": "scoped modification set",
+    "op": "setProtocolValue",
+    "args": [
+      "comment[modification parameters]",
+      [
+        {
+          "name": "Oxidation",
+          "targetAminoAcids": "M",
+          "type": "variable"
+        }
+      ],
+      [
+        "a.raw"
+      ]
+    ],
+    "valid": true
+  },
+  {
+    "name": "clear optional tolerance",
+    "op": "setProtocolValue",
+    "args": [
+      "comment[fragment mass tolerance]",
+      "",
+      "all"
+    ],
+    "valid": true
+  },
+  {
+    "name": "empty file scope",
+    "op": "setProtocolValue",
+    "args": [
+      "comment[instrument]",
+      {
+        "id": "MS:1",
+        "label": "x"
+      },
+      []
+    ],
+    "valid": false
+  },
+  {
+    "name": "duplicate files",
+    "op": "setProtocolValue",
+    "args": [
+      "comment[precursor mass tolerance]",
+      "10 ppm",
+      [
+        "a.raw",
+        "a.raw"
+      ]
+    ],
+    "valid": false
+  },
+  {
+    "name": "missing scope",
+    "op": "setProtocolValue",
+    "args": [
+      "comment[precursor mass tolerance]",
+      "10 ppm"
+    ],
+    "valid": false
+  },
+  {
+    "name": "unknown scope",
+    "op": "setProtocolValue",
+    "args": [
+      "comment[precursor mass tolerance]",
+      "10 ppm",
+      "selected"
+    ],
+    "valid": false
+  },
+  {
+    "name": "bad scoped tolerance",
+    "op": "setProtocolValue",
+    "args": [
+      "comment[precursor mass tolerance]",
+      "10",
+      "all"
+    ],
+    "valid": false
+  },
+  {
+    "name": "multiple instrument values",
+    "op": "setProtocolValue",
+    "args": [
+      "comment[instrument]",
+      [
+        {
+          "id": "MS:1",
+          "label": "x"
+        },
+        {
+          "id": "MS:2",
+          "label": "y"
+        }
+      ],
+      "all"
+    ],
+    "valid": false
+  },
+  {
+    "name": "missing scoped modification site",
+    "op": "setProtocolValue",
+    "args": [
+      "comment[modification parameters]",
+      [
+        {
+          "name": "Oxidation",
+          "type": "variable"
+        }
+      ],
+      "all"
+    ],
+    "valid": false
+  },
+  {
+    "name": "missing modification target",
+    "op": "setModifications",
+    "args": [
+      [
+        {
+          "name": "Oxidation",
+          "unimodAccession": "UNIMOD:35"
+        }
+      ]
+    ],
+    "valid": false
+  }
+]

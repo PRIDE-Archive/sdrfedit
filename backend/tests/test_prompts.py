@@ -1,4 +1,4 @@
-"""Step-focus prompts must match the new 6-step wizard semantics."""
+"""Step-focus prompts must match the current five-step wizard semantics."""
 
 from app.llm.prompts import (
     CHARACTERISTICS_PROCEDURE,
@@ -209,8 +209,10 @@ def test_setup_procedure_no_publication_offers_pride_fallback():
 def test_characteristics_procedure_reuses_evidence_and_limits_lookups():
     text = CHARACTERISTICS_PROCEDURE.lower()
     assert "evidence already gathered" in text
-    assert "do not call get_pride_metadata" in text
-    assert "at most one lookup per column" in text
+    assert "call get_pride_metadata only if" in text
+    assert "full result is absent" in text
+    assert "each distinct controlled value" in text
+    assert "avoid duplicate lookups" in text
     assert "search_ontology" in text
     assert "recommended" in text
     assert "search_specification" in text
@@ -303,3 +305,63 @@ def test_setup_distinguishes_pure_cultures_from_communities():
     assert "pure isolate originating from soil/water is not a microbial community" in SETUP_PROCEDURE
     for template in ("metaproteomics", "human-gut", "soil", "water"):
         assert template in SETUP_PROCEDURE
+
+
+def test_merged_sample_prompt_includes_definitions_and_assignments():
+    text = render_step_focus("samples", WizardSnapshot(currentStep=1, currentStepId="samples"))
+    assert 'step 2 of 5' in text
+    assert 'Samples & Groups' in text
+    for op in ('addCharacteristicChoice', 'setFactors', 'setSourceNames', 'setSampleCharacteristicValue', 'setFactorColumnValues'):
+        assert op in text
+    assert CHARACTERISTICS_PROCEDURE in text
+    assert 'Do not assign values to individual samples yet' not in text
+
+
+def test_samples_have_one_integrated_procedure_and_preserve_manual_work():
+    text = render_step_focus("samples", WizardSnapshot(sampleCount=2))
+    questions = [
+        "1. What are your sample names and biological replicates?",
+        "2. What describes your samples?",
+        "3. Which attributes are your study factors?",
+        "4. Review sample metadata.",
+    ]
+    assert [text.index(q) for q in questions] == sorted(text.index(q) for q in questions)
+    assert text.count(CHARACTERISTICS_PROCEDURE) == 1
+    assert "balanced group sizes alone" in text
+    assert "existing or newly proposed candidates" in text
+    assert "Preserve an existing explicit no-factor decision" in text
+    assert render_step_focus("characteristics", None) == render_step_focus("samples", None)
+
+
+def test_protocol_context_exposes_template_fields_and_avoids_unconditional_ms_requirements():
+    snapshot = WizardSnapshot(
+        protocolColumns=[{"name": "comment[assay]", "requirement": "required"}],
+        genericProtocolFields=[{"name": "comment[assay]", "value": "Olink", "options": ["Olink"]}],
+        selectedTemplates=[{"name": "affinity-proteomics", "version": "1.0.0"}],
+    )
+    focus = render_step_focus("protocol", snapshot)
+    assert "setTemplateValue" in focus
+    assert "must not be forced through MS-only fields" in focus
+    context = render_wizard_context(snapshot)
+    assert "comment[assay]" in context and "Olink" in context
+    assert "authoritative, pinned versions" in context
+
+
+def test_sample_recommendations_use_explicit_attribute_editor_not_implicit_defaults():
+    text = render_step_focus("samples", WizardSnapshot(sampleCount=3))
+    assert 'applyCharacteristicDraft [column, choices, "explicit", assignments]' in text
+    assert 'A candidate alone NEVER assigns all samples' in text
+    assert 'single candidate applies to all samples automatically' not in text
+    assert 'Unknown membership stays ""' in text
+    assert 'one card per attribute' in text
+
+
+def test_label_catalogue_survives_snapshot_and_is_advertised_to_ai():
+    configs = [{"id": "dimethyl3plex", "name": "Dimethyl 3-plex (0/4/8)",
+                "labels": ["DIMETHYL0", "DIMETHYL4", "DIMETHYL8"]}]
+    snapshot = WizardSnapshot.model_validate({"availableLabelConfigs": configs})
+    assert snapshot.model_dump()["availableLabelConfigs"] == configs
+    text = render_wizard_context(snapshot)
+    for value in ("dimethyl3plex", "DIMETHYL0", "DIMETHYL4", "DIMETHYL8"):
+        assert value in text
+    assert "Never guess IDs" in RUNS_FILES_PROCEDURE

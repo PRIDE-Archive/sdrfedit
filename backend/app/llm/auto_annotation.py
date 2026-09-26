@@ -30,8 +30,8 @@ Never invent sample identities, biological replicates, file/channel assignments,
 or experimental facts to pass validation. Retrieve available evidence first.
 Unknown values may use SDRF missing-value conventions only where allowed and
 justified. Identifier conflicts and ambiguous mappings must be reported blocked.
-The client requests each step once and pauses on unresolved issues or application
-errors; it does not automatically retry or repair. If evidence is insufficient,
+The client requests each step once and may attempt bounded repairs of invalid
+action arguments. It pauses on unresolved evidence or unrepaired application errors. If evidence is insufficient,
 state exactly what the user must provide or decide and report blocked. The user
 controls when to continue. Any manual confirmation-card instructions are
 superseded in this mode; evidence requirements are not. Keep reasoning and

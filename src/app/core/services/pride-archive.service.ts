@@ -51,7 +51,7 @@ function isLikelyRawFile(fileName: string, category: string): boolean {
 export async function fetchPrideRawFileNames(
   pxdInput: string,
   options?: { timeoutMs?: number; signal?: AbortSignal }
-): Promise<{ accession: string; fileNames: string[] }> {
+): Promise<{ accession: string; fileNames: string[]; fileUrls: Record<string, string> }> {
   const accession = normalizePxdAccession(pxdInput);
   if (!isValidPxdAccession(accession)) {
     throw new Error('Invalid PXD accession. Expected format: PXD000001');
@@ -80,6 +80,7 @@ export async function fetchPrideRawFileNames(
     const payload = (await response.json()) as unknown;
     const list = Array.isArray(payload) ? payload : [];
     const names = new Set<string>();
+    const fileUrls: Record<string, string> = Object.create(null);
 
     for (const item of list) {
       if (!item || typeof item !== 'object') continue;
@@ -89,6 +90,13 @@ export async function fetchPrideRawFileNames(
       const category = categoryValue(rec);
       if (!isLikelyRawFile(fileName, category)) continue;
       names.add(fileName);
+      for (const location of (Array.isArray(rec['publicFileLocations']) ? rec['publicFileLocations'] : [])) {
+        const url = typeof location === 'string' ? location : location?.value;
+        if (typeof url === 'string' && /^(https?|ftp):\/\//i.test(url)) {
+          fileUrls[fileName] ??= url;
+          break;
+        }
+      }
     }
 
     const fileNames = [...names].sort((a, b) =>
@@ -99,7 +107,7 @@ export async function fetchPrideRawFileNames(
       throw new Error(`No RAW files found for ${accession}`);
     }
 
-    return { accession, fileNames };
+    return { accession, fileNames, fileUrls };
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') {
       throw new Error(`Timed out fetching files for ${accession}`);

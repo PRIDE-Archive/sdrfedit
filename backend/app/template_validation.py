@@ -9,6 +9,11 @@ from semantic_version import Version
 from .template_catalog import CatalogSnapshot
 
 
+def _matches_allowed_value(value: str, params: dict) -> bool:
+    allowed = [str(v) for v in params.get('values', [])]
+    return value in allowed if params.get('case_sensitive', False) else value.lower() in [v.lower() for v in allowed]
+
+
 def validate_table(snapshot: CatalogSnapshot, selected: list[dict], tsv: str) -> dict:
     resolved = snapshot.resolve(selected, availability=False)
     issues = []
@@ -42,8 +47,18 @@ def validate_table(snapshot: CatalogSnapshot, selected: list[dict], tsv: str) ->
                 report('Empty cell.', name, index, value)
                 continue
             if value.lower() in reserved:
-                if definition.get(reserved[value.lower()]) is not True: report('Reserved value is not allowed.', name, index, value)
-                continue
+                permission = definition.get(reserved[value.lower()])
+                if permission is True:
+                    continue  # An explicitly allowed sentinel may bypass the normal value type.
+                # A reserved word can also be an ordinary, explicitly enumerated value
+                # (e.g. pooled in characteristics[pooled sample]). In that case keep
+                # checking the column's other validators. An explicit prohibition wins.
+                enumerated = any(rule['validator_name'] == 'values' and
+                                 _matches_allowed_value(value, rule.get('params', {}))
+                                 for rule in definition.get('validators', []))
+                if permission is False or not enumerated:
+                    report('Reserved value is not allowed.', name, index, value)
+                    continue
             kind = definition.get('type')
             if kind == 'integer' and not re.fullmatch(r'[+-]?\d+', value): report('Expected an integer.', name, index, value)
             if kind == 'float':
@@ -56,8 +71,7 @@ def validate_table(snapshot: CatalogSnapshot, selected: list[dict], tsv: str) ->
                 valid = True
                 if validator == 'single_cardinality_validator': continue
                 if validator == 'values':
-                    allowed = [str(v) for v in params.get('values', [])]
-                    valid = value in allowed if params.get('case_sensitive', False) else value.lower() in [v.lower() for v in allowed]
+                    valid = _matches_allowed_value(value, params)
                 elif validator == 'pattern':
                     valid = re.search(params['pattern'], value, 0 if params.get('case_sensitive', True) else re.I) is not None
                 elif validator == 'semver':

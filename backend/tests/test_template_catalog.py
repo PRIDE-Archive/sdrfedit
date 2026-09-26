@@ -209,3 +209,94 @@ def test_conflicts_identify_selected_roots_without_automatic_replacement():
 def test_switch_does_not_enable_intrinsically_unsupported_templates():
     s = snapshot(doc('tech', 'technology'), doc('future', 'technology', unknown_rule=True))
     assert resolve(s, 'tech')['availability']['future']['status'] == 'conflicting'
+
+
+async def test_assistant_template_columns_paginate_below_dispatch_limit_without_losing_rules(monkeypatch):
+    from app.tools import templates, registry
+    parent = doc('base')
+    parent['columns'] = [
+        {'name': f'characteristics[field {i}]', 'description': 'description ' * 100,
+         'requirement': 'required', 'allow_not_available': False,
+         'validators': [{'validator_name': 'ontology', 'params': {'ontologies': ['ncit']}}]}
+        for i in range(45)
+    ]
+    snap = snapshot(parent, doc('derived', 'sample', extends='base'))
+    monkeypatch.setattr(templates, '_snapshot', AsyncMock(return_value=snap))
+    seen = []
+    offset = 0
+    pages = 0
+    while True:
+        raw = await registry.dispatch('get_template_columns', {
+            'name': 'derived', 'offset': offset, 'limit': 100,
+        }, 'test')
+        result = json.loads(raw)
+        assert 'error' not in result, result
+        assert len(raw) < registry.MAX_RESULT_CHARS
+        assert result['totalColumns'] == 45
+        assert len(result['requiredColumns']) == 45
+        assert result['snapshotId'] == snap.snapshot_id
+        for column in result['columns']:
+            assert column['ontologies'] == ['ncit']
+            assert column['validators'] == parent['columns'][0]['validators']
+            assert column['allowNotAvailable'] is False
+            assert column['description'] == parent['columns'][0]['description']
+        seen.extend(c['name'] for c in result['columns'])
+        pages += 1
+        if result['nextOffset'] is None:
+            break
+        assert result['nextOffset'] > offset
+        offset = result['nextOffset']
+    assert pages > 1
+    assert seen == [c['name'] for c in parent['columns']]
+    assert (await templates.get_template_columns('derived', offset=45))['columns'] == []
+
+
+@pytest.mark.parametrize('offset,limit', [(-1, 20), (0, 0), (0, 101), ('0', 20), (False, 20)])
+async def test_template_column_paging_rejects_invalid_arguments(offset, limit):
+    from app.tools import templates
+    from app.tools.http import ToolHttpError
+    with pytest.raises(ToolHttpError, match='offset'):
+        await templates.get_template_columns('anything', offset=offset, limit=limit)
+
+
+@pytest.mark.parametrize('value', ['pooled', 'not pooled'])
+def test_pooled_sample_accepts_official_enumeration_without_sentinel_flag(value):
+    d = doc('tech', 'technology')
+    d['columns'] = [{'name': 'characteristics[pooled sample]',
+        'allow_not_available': True, 'allow_not_applicable': True,
+        'validators': [
+            {'validator_name': 'values', 'params': {'values': ['not pooled', 'pooled'], 'error_level': 'warning'}},
+            {'validator_name': 'pattern', 'params': {'pattern': r'^(not pooled|pooled|SN=.+(;SN=.+)*)$', 'error_level': 'warning'}},
+        ]}]
+    result = validate_table(snapshot(d), [{'name': 'tech'}], f'characteristics[pooled sample]\n{value}\n')
+    assert result['valid'] and result['issues'] == []
+
+
+@pytest.mark.parametrize('definition,value,valid,message', [
+    ({}, 'pooled', False, 'Reserved value is not allowed.'),
+    ({'validators': [{'validator_name': 'pattern', 'params': {'pattern': '.*'}}]},
+     'pooled', False, 'Reserved value is not allowed.'),
+    ({'allow_pooled': False, 'validators': [{'validator_name': 'values', 'params': {'values': ['pooled']}}]},
+     'pooled', False, 'Reserved value is not allowed.'),
+    ({'allow_pooled': True, 'type': 'integer', 'validators': [{'validator_name': 'pattern', 'params': {'pattern': r'^\d+$'}}]},
+     'pooled', True, None),
+    ({'validators': [{'validator_name': 'values', 'params': {'values': ['pooled']}},
+                     {'validator_name': 'pattern', 'params': {'pattern': '^not pooled$'}}]},
+     'pooled', False, 'Value fails pattern.'),
+    ({'validators': [{'validator_name': 'values', 'params': {'values': ['pooled'], 'case_sensitive': True}}]},
+     'POOLED', False, 'Reserved value is not allowed.'),
+    ({'validators': [{'validator_name': 'values', 'params': {'values': ['pooled']}}]},
+     'POOLED', True, None),
+    ({'validators': [{'validator_name': 'values', 'params': {'values': ['pooled']}}]},
+     'not available', False, 'Reserved value is not allowed.'),
+    ({'allow_not_available': True, 'type': 'integer'}, 'not available', True, None),
+])
+def test_reserved_value_permissions_preserve_column_constraints(definition, value, valid, message):
+    d = doc('tech', 'technology')
+    d['columns'] = [{'name': 'field', **definition}]
+    result = validate_table(snapshot(d), [{'name': 'tech'}], f'field\n{value}\n')
+    assert result['valid'] is valid
+    if message:
+        assert any(issue['message'] == message for issue in result['issues'])
+    else:
+        assert result['issues'] == []

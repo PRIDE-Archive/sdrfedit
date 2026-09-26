@@ -1,4 +1,5 @@
-import { genericTemplateColumns, templateFieldValue, templateFieldError } from '../utils/template-fields';
+import { PROTOCOL_COLUMNS, protocolColumns, protocolFieldError } from '../utils/protocol-fields';
+import type { ProtocolField } from '../models/wizard';
 /**
  * Wizard State Service
  *
@@ -32,7 +33,6 @@ import {
   factorDecisionValid,
   runFactorAssignmentsValid,
   factorDefinitionErrors,
-  factorAssignmentsValid,
   normalizeFactor,
   getSampleTemplateId,
   hasCellLinesExperiment,
@@ -45,12 +45,16 @@ import {
   getSpecialtyCharacteristicKey,
   isWizardSkippedCharacteristic,
   addCharacteristicChoiceToMap,
+  sampleCompletionErrors,
+  characteristicValueError,
+  restoreWizardStep,
   removeCharacteristicChoiceFromMap,
   getCharacteristicChoices,
   choiceValuesEqual,
   materializeSampleFieldsFromChoices,
   isLabelFree,
   resolveWizardLabels,
+  resolveRunLabelConfigId,
   packSamplesIntoRuns,
   remapRunsToLabels,
   remapSingleRunToLabels,
@@ -200,7 +204,8 @@ export class WizardStateService {
     };
   });
   readonly step1Combination = computed(() => this.templateService.validateTemplateCombination(this.templateSelection()));
-  readonly isStep1Valid = computed(() => !this.templateService.isLoading() && this._state().sampleCount >= 1 && this.step1Combination().valid);
+  readonly sampleCountError = signal('');
+  readonly isStep1Valid = computed(() => !this.sampleCountError() && !this.templateService.isLoading() && Number.isInteger(this._state().sampleCount) && this._state().sampleCount <= 10000 && this._state().sampleCount >= 1 && this.step1Combination().valid);
 
   readonly isStep2Valid = computed(() => {
     const state = this._state();
@@ -227,24 +232,7 @@ export class WizardStateService {
 
   /** Sample Values: names, bio-reps, multi-value chars, and per-sample factor picks. */
   readonly isStep3Valid = computed(() => {
-    const state = this._state();
-    if (state.samples.length === 0) return false;
-    if (!state.samples.every(s => s.sourceName.trim().length > 0)) return false;
-
-    const multiRequired = (state.characteristicColumns || []).filter(c => {
-      if (c.requirement !== 'required') return false;
-      if (isWizardSkippedCharacteristic(c.name)) return false;
-      if (getSpecialtyCharacteristicKey(c.name) === 'material type') return false;
-      return (state.characteristicChoices?.[c.name] || []).length >= 2;
-    });
-
-    const sampleValuesOk = state.samples.every(sample =>
-      multiRequired.every(col => !!sample.characteristicValues?.[col.name]?.trim())
-    );
-
-    const factorValuesOk = factorAssignmentsValid(state);
-
-    return sampleValuesOk && factorValuesOk;
+    return sampleCompletionErrors(this._state(), false).length === 0;
   });
 
   readonly isStep4Valid = computed(() => {
@@ -256,13 +244,9 @@ export class WizardStateService {
 
   readonly isStep5Valid = computed(() => {
     const state = this._state();
-    const required = (name: string) => state.effectiveColumns?.some(c => c.name === name && c.requirement === 'required');
-    return (!required('comment[instrument]') || state.instrument !== null)
-      && (!required('comment[cleavage agent details]') || state.cleavageAgent !== null)
-      && (!required('comment[modification parameters]') || state.modifications.length > 0)
-      && isValidMassTolerance(state.precursorMassTolerance)
-      && isValidMassTolerance(state.fragmentMassTolerance)
-      && genericTemplateColumns(state).every(c => !templateFieldError(c, templateFieldValue(state, c)));
+    return protocolColumns(state).every(column => !protocolFieldError(state, column))
+      && (!!state.protocolFields?.[PROTOCOL_COLUMNS.precursorMassTolerance] || isValidMassTolerance(state.precursorMassTolerance))
+      && (!!state.protocolFields?.[PROTOCOL_COLUMNS.fragmentMassTolerance] || isValidMassTolerance(state.fragmentMassTolerance));
   });
 
   readonly isStep6Valid = computed(() => {
@@ -289,10 +273,8 @@ export class WizardStateService {
     switch (id) {
       case 'setup':
         return this.isStep1Valid();
-      case 'characteristics':
-        return this.isStep2Valid();
       case 'samples':
-        return this.isStep3Valid();
+        return this.isStep2Valid() && this.isStep3Valid();
       case 'runs-files':
         return this.isRunsFilesValid();
       case 'protocol':
@@ -323,9 +305,6 @@ export class WizardStateService {
   nextStep(): void {
     if (this.canProceed()) {
       const next = this._currentStep() + 1;
-      if (WIZARD_STEPS[next]?.id === 'characteristics') {
-        this.ensureDefaultFactors();
-      }
       if (WIZARD_STEPS[next]?.id === 'samples') {
         this.syncCharacteristicAssignments();
         this.syncFactorAssignments();
@@ -346,9 +325,6 @@ export class WizardStateService {
 
   goToStep(step: number): void {
     if (step >= 0 && step < this.totalSteps) {
-      if (WIZARD_STEPS[step]?.id === 'characteristics') {
-        this.ensureDefaultFactors();
-      }
       if (WIZARD_STEPS[step]?.id === 'samples') {
         this.syncCharacteristicAssignments();
         this.syncFactorAssignments();
@@ -366,22 +342,22 @@ export class WizardStateService {
    * Does not auto-generate file slots (PXD / paste / planner are explicit).
    */
   ensureMsRunsForFilesStep(): void {
-    const s = this._state();
-    if ((s.msRuns || []).length === 0) {
-      this.autoPackSamplesIntoRuns();
-      this._state.update(state => ({ ...state, msRuns: state.msRuns.map(run => ({
-        ...run, placeholderSnapshot: runPlaceholderSnapshot(run),
-      })) }));
-    } else {
-      this._state.update(st => {
-        return {
-          ...st,
-          msRuns: normalizeMsRunKits(st.msRuns || [], st.labelConfigId || 'lf').map(
-            run => ({ ...run, sampleIndices: [...new Set(run.channels.flatMap(c => c.role === 'pooled' ? c.pooledSampleIndices || [] : c.sampleIndex == null ? [] : [c.sampleIndex]))] })
-          ),
-        };
-      });
-    }
+    const created = !this._state().msRuns?.length;
+    if (created) this.autoPackSamplesIntoRuns();
+    // Finish the same migration the page effect performs before an automatic
+    // request snapshots state. Delayed component mounting must be a no-op.
+    for (const run of this._state().msRuns) this.ensureLabelFreeRows(run.id);
+    this._state.update(state => {
+      const msRuns = normalizeMsRunKits(state.msRuns || [], state.labelConfigId || 'lf').map(run => ({
+        ...run,
+        sampleIndices: [...new Set(run.channels.flatMap(c => c.role === 'pooled'
+          ? c.pooledSampleIndices || [] : c.sampleIndex == null ? [] : [c.sampleIndex]))],
+      }));
+      if (created) {
+        for (const run of msRuns) run.placeholderSnapshot = runPlaceholderSnapshot(run);
+      }
+      return JSON.stringify(msRuns) === JSON.stringify(state.msRuns) ? state : { ...state, msRuns };
+    });
   }
 
   /**
@@ -453,13 +429,14 @@ export class WizardStateService {
   }
 
   setSampleTemplate(template: WizardTemplate | null): void { this.setLayerTemplates('sample', template ? [template] : []); }
+  setSampleTemplates(templates: string[]): void { this.setLayerTemplates('sample', templates); }
   setTechnologyTemplate(template: WizardTemplate): void { this.setLayerTemplates('technology', [template]); }
   setExperimentTemplates(templates: string[]): void { this.setLayerTemplates('experiment', templates); }
   toggleSampleMetadataTemplate(template: string): void { this.toggleTemplate(template); }
   toggleExperimentTemplate(template: string): void { this.toggleTemplate(template); }
 
   setTemplateValue(name: string, value: string): void {
-    this._state.update(s => ({ ...s, dynamicTemplateValues: { ...s.dynamicTemplateValues, [name]: value } }));
+    this._state.update(s => ({ ...this.withoutProtocolField(s, name), dynamicTemplateValues: { ...s.dynamicTemplateValues, [name]: value } }));
   }
 
   /**
@@ -470,7 +447,12 @@ export class WizardStateService {
   }
 
   setSampleCount(count: number): void {
-    const sampleCount = Math.max(1, Math.floor(count));
+    if (!Number.isInteger(count) || count < 1 || count > 10000) {
+      this.sampleCountError.set('Enter a whole number between 1 and 10000.');
+      return;
+    }
+    this.sampleCountError.set('');
+    const sampleCount = count;
     this._state.update(s => {
       const samples = [...s.samples];
       while (samples.length < sampleCount) {
@@ -527,6 +509,26 @@ export class WizardStateService {
     });
   }
 
+  /** Apply an attribute editor draft in one state update, preserving ontology metadata. */
+  applyCharacteristicDraft(columnName: string, choices: import('../models/wizard').CharacteristicChoice[], mode: 'shared' | 'varies' | 'explicit', assignments: string[]): void {
+    if (!this._state().characteristicColumns.some(column => column.name === columnName)) throw new Error('This attribute is no longer available.');
+    for (const choice of choices) {
+      const error = characteristicValueError(this._state(), columnName, choice.value);
+      if (error) throw new Error(error);
+    }
+    if ((mode === 'shared' && choices.length !== 1) || (mode === 'varies' && choices.length < 2)) throw new Error('Choose one shared value or at least two different values.');
+    if (choices.some(choice => !choice.value.trim()) || new Set(choices.map(choice => choice.value.trim().toLowerCase())).size !== choices.length) throw new Error('Values must be non-empty and unique.');
+    if (mode !== 'shared' && (assignments.length !== this._state().samples.length || assignments.some(value => value && !choices.some(choice => choiceValuesEqual(choice.value, value))))) throw new Error('Choose sample values from the defined options.');
+    this._state.update(state => syncLegacyFieldsFromChoices({
+      ...state,
+      characteristicChoices: { ...state.characteristicChoices, [columnName]: choices.map(choice => ({ ...choice })) },
+      samples: state.samples.map((sample, i) => ({ ...sample, characteristicValues: {
+        ...sample.characteristicValues, [columnName]: mode === 'shared' ? choices[0].value : assignments[i],
+      } })),
+    }));
+    this.syncFactorAssignments();
+  }
+
   addCharacteristicChoice(
     columnName: string,
     value: string,
@@ -542,6 +544,8 @@ export class WizardStateService {
       );
       return syncLegacyFieldsFromChoices({ ...s, characteristicChoices });
     });
+    this.syncCharacteristicAssignments();
+    this.syncFactorAssignments();
   }
 
   removeCharacteristicChoice(columnName: string, value: string): void {
@@ -553,6 +557,8 @@ export class WizardStateService {
       );
       return syncLegacyFieldsFromChoices({ ...s, characteristicChoices });
     });
+    this.syncCharacteristicAssignments();
+    this.syncFactorAssignments();
   }
 
   getChoices(columnName: string): CharacteristicChoice[] {
@@ -719,7 +725,7 @@ export class WizardStateService {
       const samples = s.samples.map(sample => {
         const values = { ...(sample.characteristicValues || {}) };
         for (const [columnName, list] of Object.entries(choices)) {
-          if (list.length === 1) {
+          if (list.length === 1 && values[columnName] !== '') {
             values[columnName] = list[0].value;
           } else if (list.length === 0) {
             delete values[columnName];
@@ -994,6 +1000,8 @@ export class WizardStateService {
   /** Change kit for one run and remap its channels. */
   setRunLabelConfig(runId: string, configId: string): void {
     this._state.update(s => {
+      const current = s.msRuns.find(r => r.id === runId);
+      if (!current || resolveRunLabelConfigId(current, s) === configId) return s;
       const labels =
         configId === 'lf'
           ? ['label free sample']
@@ -1001,9 +1009,10 @@ export class WizardStateService {
       if (labels.length === 0) return s;
       return {
         ...s,
+        dataFiles: s.dataFiles.map(f => f.runId === runId ? { ...f, runId: undefined, sampleIndex: undefined, mappingId: undefined } : f),
         msRuns: (s.msRuns || []).map(run =>
           run.id === runId
-            ? remapSingleRunToLabels(run, labels, configId)
+            ? { ...remapSingleRunToLabels(run, labels, configId), sampleMappingMode: undefined }
             : run.labelConfigId
               ? run
               : { ...run, labelConfigId: s.labelConfigId || 'lf' }
@@ -1097,6 +1106,25 @@ export class WizardStateService {
     });
   }
 
+  configureSampleGroups(groups: { name: string; members: number[] }[]): void {
+    const state = this._state();
+    if (!groups.length || groups.some(g => !g.name.trim() || !g.members.length)) throw new Error('Name each group and select its samples.');
+    if (new Set(groups.map(g => g.name.trim().toLowerCase())).size !== groups.length) throw new Error('Group names must be unique.');
+    if (groups.some(g => g.members.some(i => !state.samples.some(s => s.index === i)))) throw new Error('Unknown sample in group.');
+    const used = new Set<string>();
+    const runs = groups.map((group, index) => {
+      const members = [...new Set(group.members)].sort((a,b) => a-b);
+      const existing = state.msRuns.find(r => !used.has(r.id) && r.groupMembers && JSON.stringify([...r.groupMembers].sort((a,b)=>a-b)) === JSON.stringify(members));
+      if (existing) { used.add(existing.id); return { ...existing, name: group.name.trim(), groupMembers: members }; }
+      const kit = state.msRuns[0]?.labelConfigId || state.labelConfigId || 'lf';
+      const labels = resolveWizardLabels({ ...state, labelConfigId: kit });
+      return { id: `group_${Date.now().toString(36)}_${index}`, name: group.name.trim(), labelConfigId: kit,
+        groupMembers: members, sampleIndices: members, sampleMappingMode: kit === 'lf' ? 'separate' as const : undefined,
+        channels: createEmptyChannelsForLabels(labels) };
+    });
+    this._state.set({ ...state, msRuns: runs, dataFiles: state.dataFiles.map(f => f.runId && !used.has(f.runId) ? { ...f, runId: undefined, sampleIndex: undefined } : f) });
+  }
+
   addMsRun(): void {
     this._state.update(s => {
       const labels = resolveWizardLabels(s);
@@ -1136,6 +1164,108 @@ export class WizardStateService {
     }));
   }
 
+  /** Migrate legacy LF assignments without changing their file ownership. */
+  ensureLabelFreeRows(runId: string): void {
+    this._state.update(s => {
+      const run = s.msRuns.find(r => r.id === runId);
+      if (!run || resolveRunLabelConfigId(run, s) !== 'lf' || run.sampleMappingMode === 'rows') return s;
+      const channels: WizardChannelAssignment[] = run.sampleMappingMode === 'separate'
+        ? (run.sampleIndices || []).map(i => ({ label: 'label free sample', role: 'sample', sampleIndex: i }))
+        : run.channels.map(ch => ({ ...ch }));
+      if (!channels.length) channels.push({ label: 'label free sample', role: 'empty' });
+      channels.forEach(ch => ch.mappingId = crypto.randomUUID());
+      return { ...s, msRuns: s.msRuns.map(r => r.id === runId ? { ...r, sampleMappingMode: 'rows' as const, channels } : r),
+        dataFiles: s.dataFiles.map(f => {
+          if (f.runId !== runId) return f;
+          const ch = run.sampleMappingMode === 'separate' ? channels.find(c => c.sampleIndex === f.sampleIndex) : channels[0];
+          return ch ? { ...f, mappingId: ch.mappingId } : { ...f, runId: undefined, sampleIndex: undefined, mappingId: undefined };
+        }) };
+    });
+  }
+
+  addLabelFreeRow(runId: string): void {
+    this.ensureLabelFreeRows(runId);
+    this._state.update(s => ({ ...s, msRuns: s.msRuns.map(r => r.id === runId && r.sampleMappingMode === 'rows'
+      ? { ...r, channels: [...r.channels, { mappingId: crypto.randomUUID(), label: 'label free sample', role: 'empty' as const }] } : r) }));
+  }
+
+  removeLabelFreeRow(runId: string, mappingId: string): void {
+    this._state.update(s => ({ ...s,
+      msRuns: s.msRuns.map(r => r.id === runId ? { ...r, channels: r.channels.filter(c => c.mappingId !== mappingId) } : r),
+      dataFiles: s.dataFiles.map(f => f.runId === runId && f.mappingId === mappingId ? { ...f, runId: undefined, sampleIndex: undefined, mappingId: undefined } : f) }));
+  }
+
+  /** LF numbering is local to one sample/pool; labeled files share a plex. */
+  setScopedFileMetadata(runId: string, mappingId: string | undefined, pattern: 'none' | 'fractions' | 'repeats'): void {
+    this._state.update(s => {
+      const run = s.msRuns.find(r => r.id === runId);
+      if (!run) return s;
+      const lf = resolveRunLabelConfigId(run, s) === 'lf';
+      if (lf && (!mappingId || !run.channels.some(ch => ch.mappingId === mappingId))) return s;
+      let ordinal = 0;
+      return { ...s, dataFiles: s.dataFiles.map(f => {
+        if (f.runId !== runId || (lf && f.mappingId !== mappingId)) return f;
+        ordinal++;
+        return { ...f, fractionId: pattern === 'fractions' ? ordinal : 1,
+          technicalReplicate: pattern === 'repeats' ? ordinal : 1 };
+      }) };
+    });
+  }
+
+  numberScopedFiles(runId: string, mappingId: string | undefined, field: 'fractionId' | 'technicalReplicate', direction: 'asc' | 'desc'): void {
+    this._state.update(s => {
+      const run = s.msRuns.find(r => r.id === runId);
+      if (!run) return s;
+      const lf = resolveRunLabelConfigId(run, s) === 'lf';
+      if (lf && (!mappingId || !run.channels.some(ch => ch.mappingId === mappingId))) return s;
+      const matches = (f: WizardDataFile) => f.runId === runId && (!lf || f.mappingId === mappingId);
+      const count = s.dataFiles.filter(matches).length;
+      let ordinal = 0;
+      return { ...s, dataFiles: s.dataFiles.map(f => matches(f)
+        ? { ...f, [field]: direction === 'asc' ? ++ordinal : count - ordinal++ } : f) };
+    });
+  }
+
+  assignFilesToLabelFreeRow(indices: number[], runId: string, mappingId: string): void {
+    const s = this._state(), run = s.msRuns.find(r => r.id === runId);
+    const ch = run?.channels.find(c => c.mappingId === mappingId);
+    if (!run || resolveRunLabelConfigId(run, s) !== 'lf' || !ch || ch.role === 'empty' ||
+      (ch.role === 'pooled' && ((ch.pooledSampleIndices?.length ?? 0) < 2))) throw new Error('Choose a sample or a pool with at least two samples.');
+    const chosen = new Set(indices);
+    this._state.update(s => ({ ...s, dataFiles: s.dataFiles.map((f, i) => chosen.has(i) && !f.runId ? { ...f, runId, mappingId, sampleIndex: ch.sampleIndex } : f) }));
+  }
+
+  setSeparateRunSamples(runId: string, indices: number[]): void {
+    const state = this._state(), run = state.msRuns.find(r => r.id === runId);
+    if (!run || resolveRunLabelConfigId(run, state) !== 'lf') throw new Error('Separate mapping requires label-free acquisition.');
+    const selected = [...new Set(indices)].filter(i => state.samples.some(s => s.index === i));
+    const previous = run.channels[0];
+    this._state.update(s => ({ ...s,
+      msRuns: s.msRuns.map(r => r.id === runId ? { ...r, sampleMappingMode: 'separate' as const, sampleIndices: selected,
+        channels: r.channels.map(ch => ({ label: ch.label, role: 'empty' as const })) } : r),
+      dataFiles: s.dataFiles.map(f => {
+        if (f.runId !== runId) return f;
+        const sampleIndex = run.sampleMappingMode === 'separate' ? f.sampleIndex : previous?.role === 'sample' ? previous.sampleIndex : undefined;
+        return sampleIndex != null && selected.includes(sampleIndex) ? { ...f, sampleIndex } : { ...f, runId: undefined, sampleIndex: undefined };
+      }),
+    }));
+  }
+
+  setPooledRunMapping(runId: string): void {
+    this._state.update(s => ({ ...s, msRuns: s.msRuns.map(run => run.id === runId ? {
+      ...run, sampleMappingMode: 'pooled' as const,
+      channels: run.channels.map((ch, i) => i === 0 ? { label: ch.label, role: 'pooled' as const,
+        pooledSampleIndices: run.sampleMappingMode === 'separate' ? [...(run.sampleIndices || [])] : ch.role === 'sample' ? [ch.sampleIndex!] : ch.pooledSampleIndices || [], sourceNameOverride: ch.sourceNameOverride } : ch),
+    } : run), dataFiles: s.dataFiles.map(f => f.runId === runId ? { ...f, sampleIndex: undefined } : f) }));
+  }
+
+  assignFilesToSeparateSample(indices: number[], runId: string, sampleIndex: number): void {
+    const state = this._state(), run = state.msRuns.find(r => r.id === runId);
+    if (!run || run.sampleMappingMode !== 'separate' || !run.sampleIndices?.includes(sampleIndex)) throw new Error('Select this sample in the separate mapping first.');
+    const chosen = new Set(indices);
+    this._state.update(s => ({ ...s, dataFiles: s.dataFiles.map((f, i) => chosen.has(i) ? { ...f, runId, sampleIndex } : f) }));
+  }
+
   setChannelAssignment(
     runId: string,
     channelIndex: number,
@@ -1143,6 +1273,14 @@ export class WizardStateService {
   ): void {
     this._state.update(s => ({
       ...s,
+      dataFiles: s.dataFiles.map(f => {
+        const run = s.msRuns.find(r => r.id === runId), ch = run?.channels[channelIndex];
+        const bindingChanged = ch && ((patch.role != null && patch.role !== ch.role) ||
+          ('sampleIndex' in patch && patch.sampleIndex !== ch.sampleIndex) ||
+          ('pooledSampleIndices' in patch && JSON.stringify(patch.pooledSampleIndices) !== JSON.stringify(ch.pooledSampleIndices)));
+        return run?.sampleMappingMode === 'rows' && f.runId === runId && f.mappingId === ch?.mappingId && bindingChanged
+          ? { ...f, runId: undefined, sampleIndex: undefined, mappingId: undefined } : f;
+      }),
       msRuns: (s.msRuns || []).map(run => {
         if (run.id !== runId) return run;
         const channels = run.channels.map((ch, i) => {
@@ -1177,38 +1315,57 @@ export class WizardStateService {
 
   // ============ Step 5: Instrument & Protocol ============
 
+  /** Commit one field without changing assignments on any other protocol field. */
+  setProtocolField(name: string, field: ProtocolField): void {
+    this._state.update(s => {
+      const value = field.choices.find(c => c.id === field.allChoiceId)?.value ?? field.choices[0]?.value;
+      const key = (Object.keys(PROTOCOL_COLUMNS) as Array<keyof typeof PROTOCOL_COLUMNS>).find(key => PROTOCOL_COLUMNS[key] === name);
+      const legacy = key ? { [key]: value ?? (key === 'modifications' ? [] : key === 'instrument' || key === 'cleavageAgent' ? null : '') }
+        : { dynamicTemplateValues: { ...s.dynamicTemplateValues, [name]: typeof value === 'string' ? value : '' } };
+      return { ...s, ...legacy, protocolFields: { ...s.protocolFields, [name]: structuredClone(field) } };
+    });
+  }
+
+  /** Existing global/AI setters explicitly replace this field's file assignments. */
+  private withoutProtocolField(state: WizardState, name: string): WizardState {
+    if (!state.protocolFields?.[name]) return state;
+    const protocolFields = { ...state.protocolFields };
+    delete protocolFields[name];
+    return { ...state, protocolFields };
+  }
+
   setInstrument(instrument: OntologyTerm): void {
-    this._state.update(s => ({ ...s, instrument }));
+    this._state.update(s => ({ ...this.withoutProtocolField(s, PROTOCOL_COLUMNS.instrument), instrument }));
   }
 
   setCleavageAgent(cleavageAgent: WizardCleavageAgent): void {
-    this._state.update(s => ({ ...s, cleavageAgent }));
+    this._state.update(s => ({ ...this.withoutProtocolField(s, PROTOCOL_COLUMNS.cleavageAgent), cleavageAgent }));
   }
 
   addModification(modification: WizardModification): void {
     this._state.update(s => ({
-      ...s,
+      ...this.withoutProtocolField(s, PROTOCOL_COLUMNS.modifications),
       modifications: [...s.modifications, modification],
     }));
   }
 
   removeModification(index: number): void {
     this._state.update(s => ({
-      ...s,
+      ...this.withoutProtocolField(s, PROTOCOL_COLUMNS.modifications),
       modifications: s.modifications.filter((_, i) => i !== index),
     }));
   }
 
   setPrecursorMassTolerance(precursorMassTolerance: string): void {
-    this._state.update(s => ({ ...s, precursorMassTolerance }));
+    this._state.update(s => ({ ...this.withoutProtocolField(s, PROTOCOL_COLUMNS.precursorMassTolerance), precursorMassTolerance }));
   }
 
   setFragmentMassTolerance(fragmentMassTolerance: string): void {
-    this._state.update(s => ({ ...s, fragmentMassTolerance }));
+    this._state.update(s => ({ ...this.withoutProtocolField(s, PROTOCOL_COLUMNS.fragmentMassTolerance), fragmentMassTolerance }));
   }
 
   setModifications(modifications: WizardModification[]): void {
-    this._state.update(s => ({ ...s, modifications }));
+    this._state.update(s => ({ ...this.withoutProtocolField(s, PROTOCOL_COLUMNS.modifications), modifications }));
   }
 
   addSuggestedPlexModifications(): void {
@@ -1218,6 +1375,7 @@ export class WizardStateService {
     const seenFamilies = new Set<string>();
 
     for (const id of kitIds) {
+      if (['tmt32', 'tmt34', 'tmt35'].includes(id)) continue; // Channel-specific isotope modifications require evidence.
       let family = '';
       let mods: WizardModification[] = [];
       if (id.startsWith('tmt16') || id.startsWith('tmt18') || id === 'tmt11' || id === 'tmt10') {
@@ -1320,7 +1478,7 @@ export class WizardStateService {
           )
       );
       if (toAdd.length === 0) return s;
-      return { ...s, modifications: [...existing, ...toAdd] };
+      return { ...this.withoutProtocolField(s, PROTOCOL_COLUMNS.modifications), modifications: [...existing, ...toAdd] };
     });
   }
 
@@ -1338,9 +1496,22 @@ export class WizardStateService {
     this._state.update(s => {
       if (index < 0 || index >= s.dataFiles.length) return s;
       const dataFiles = s.dataFiles.map((f, i) =>
-        i === index ? { ...f, ...patch } : f
+        i === index ? { ...f, ...patch,
+          downloadUrl: patch.fileName !== undefined && patch.fileName !== f.fileName
+            ? patch.downloadUrl : patch.downloadUrl ?? f.downloadUrl,
+        } : f
       );
-      return { ...s, dataFiles };
+      let protocolFields = s.protocolFields;
+      const oldName = s.dataFiles[index].fileName;
+      if (patch.fileName !== undefined && patch.fileName !== oldName && protocolFields) {
+        protocolFields = Object.fromEntries(Object.entries(protocolFields).map(([name, field]) => {
+          if (!Object.hasOwn(field.assignments, oldName)) return [name, field];
+          const assignments = { ...field.assignments, [patch.fileName!]: field.assignments[oldName] };
+          delete assignments[oldName];
+          return [name, { ...field, assignments }];
+        }));
+      }
+      return { ...s, dataFiles, protocolFields };
     });
   }
 
@@ -1363,13 +1534,17 @@ export class WizardStateService {
   }
 
   /** Replace only the unassigned pool; preserve existing file mappings. */
-  replaceWithUnassignedFileNames(names: string[]): void {
+  replaceWithUnassignedFileNames(names: string[], fileUrls: Record<string, string> = {}): void {
     const cleaned = [...new Set(names.map(n => n.trim()).filter(Boolean))];
     this._state.update(s => {
-      const assigned = s.dataFiles.filter(f => !!f.runId);
+      const previous = new Map(s.dataFiles.map(f => [f.fileName, f]));
+      const assigned = s.dataFiles.filter(f => !!f.runId).map(f => ({
+        ...f, downloadUrl: fileUrls[f.fileName] || f.downloadUrl,
+      }));
       const known = new Set(assigned.map(f => f.fileName.trim()));
       return { ...s, dataFiles: [...assigned, ...cleaned.filter(n => !known.has(n)).map(fileName => ({
-        fileName, ...parseFractionTechFromName(fileName),
+        ...previous.get(fileName), fileName, ...parseFractionTechFromName(fileName),
+        downloadUrl: fileUrls[fileName] || previous.get(fileName)?.downloadUrl,
       }))] };
     });
   }
@@ -1433,7 +1608,7 @@ export class WizardStateService {
       ...s,
       dataFiles: s.dataFiles.map((f, i) => {
         if (!set.has(i)) return f;
-        const { runId: _r, ...rest } = f;
+        const { runId: _r, sampleIndex: _s, mappingId: _m, ...rest } = f;
         return rest;
       }),
     }));
@@ -1482,6 +1657,7 @@ export class WizardStateService {
   setFactorDecision(decision: 'pending' | 'none', reason = ''): void {
     this._state.update(s => ({ ...s, factorDecision: decision, noFactorReason: reason,
       factors: decision === 'none' ? s.factors.map(f => ({ ...f, enabled: false })) : s.factors }));
+    this.syncFactorAssignments();
   }
 
   setRunFactorValue(runId: string, factorName: string, value: string): void {
@@ -1508,6 +1684,34 @@ export class WizardStateService {
       factorDecision: 'pending',
       factors: factors.map(normalizeFactor).filter(f => f.name.trim()),
     }));
+    this.syncFactorAssignments();
+  }
+
+  /** Save a custom factor and its sample assignments as one validated change. */
+  applyCustomFactorDraft(index: number, draft: WizardFactor, assignments: string[]): void {
+    const state = this._state();
+    if (index < -1 || index >= state.factors.length) throw new Error('This factor no longer exists.');
+    const factor = normalizeFactor({ ...draft, sourceCharacteristic: undefined });
+    if (factor.values.some(value => /[\t\r\n]/.test(value))) throw new Error('Factor values cannot contain tabs or line breaks.');
+    const factors = [...state.factors];
+    if (index < 0) factors.push(factor); else factors[index] = factor;
+    if (factors.some((other, i) => i !== (index < 0 ? factors.length - 1 : index) && other.name.toLowerCase() === factor.name.toLowerCase())) throw new Error('A factor with this name already exists.');
+    const errors = factorDefinitionErrors({ ...state, factors: [factor] });
+    if (errors.length) throw new Error(errors[0]);
+    if (factor.scope !== 'run' && (assignments.length !== state.samples.length || assignments.some(value => !value || !factor.values.includes(value)))) throw new Error('Assign a value to every sample before saving.');
+    const oldName = index >= 0 ? state.factors[index].name : factor.name;
+    this._state.set({ ...state, factors, factorDecision: 'pending',
+      samples: state.samples.map((sample, i) => {
+        const factorValues = { ...sample.factorValues }; delete factorValues[oldName];
+        if (factor.scope !== 'run') factorValues[factor.name] = assignments[i];
+        return { ...sample, factorValues };
+      }),
+      msRuns: state.msRuns.map(run => {
+        const factorValues = { ...run.factorValues }; const old = factorValues[oldName]; delete factorValues[oldName];
+        if (factor.scope === 'run' && old && factor.values.includes(old)) factorValues[factor.name] = old;
+        return { ...run, factorValues };
+      }),
+    });
   }
 
   addFactor(factor: WizardFactor): void {
@@ -1517,6 +1721,7 @@ export class WizardStateService {
       factorDecision: 'pending',
       factors: [...s.factors.map(normalizeFactor), next],
     }));
+    this.syncFactorAssignments();
   }
 
   updateFactor(index: number, updates: Partial<WizardFactor>): void {
@@ -1546,6 +1751,7 @@ export class WizardStateService {
       }
       return { ...s, factors };
     });
+    this.syncFactorAssignments();
   }
 
   removeFactor(index: number): void {
@@ -1556,6 +1762,7 @@ export class WizardStateService {
         factors,
       };
     });
+    this.syncFactorAssignments();
   }
 
   toggleFactor(index: number, enabled: boolean): void {
@@ -1573,6 +1780,7 @@ export class WizardStateService {
       factors[index] = { ...current, values: [...current.values, trimmed] };
       return { ...s, factors };
     });
+    this.syncFactorAssignments();
   }
 
   /** Append a candidate by factor name (AI / bridge). */
@@ -1594,6 +1802,7 @@ export class WizardStateService {
       factors[index] = { ...current, values: [...current.values, trimmed] };
       return { ...s, factors };
     });
+    this.syncFactorAssignments();
   }
 
   removeFactorValue(index: number, value: string): void {
@@ -1606,6 +1815,7 @@ export class WizardStateService {
       };
       return { ...s, factors };
     });
+    this.syncFactorAssignments();
   }
 
   /**
@@ -1643,7 +1853,7 @@ export class WizardStateService {
     const name = this.assertFactorAssignment(factorName, [value]);
     this._state.update(s => {
       const samples = [...s.samples];
-      if (sampleIndex < 0 || sampleIndex >= samples.length) return s;
+      if (!Number.isSafeInteger(sampleIndex) || sampleIndex < 0 || sampleIndex >= samples.length) throw new Error('Sample index is out of range.');
       const sample = { ...samples[sampleIndex] };
       const factorValues = { ...(sample.factorValues || {}) };
       if (!value.trim()) delete factorValues[name];
@@ -1699,6 +1909,7 @@ export class WizardStateService {
   // ============ Reset ============
 
   reset(): void {
+    this.sampleCountError.set('');
     this.templateUpdateNotice.set('');
     this._state.set(createEmptyWizardState());
     this._currentStep.set(0);
@@ -1709,6 +1920,7 @@ export class WizardStateService {
    * Merges onto an empty baseline so older snapshots missing new fields still work.
    */
   hydrate(state: WizardState, step = 0): void {
+    this.sampleCountError.set('');
     const baseline = createEmptyWizardState();
     const factors = (state.factors?.length ? state.factors : baseline.factors).map(normalizeFactor);
     const samples = (state.samples?.length ? state.samples : baseline.samples).map(sample => ({
@@ -1718,6 +1930,7 @@ export class WizardStateService {
     const next: WizardState = {
       ...baseline,
       ...state,
+      wizardFlowVersion: 2,
       selectedTemplates: state.selectedTemplates,
       sampleTemplate: getSampleTemplateId(state),
       template: getSampleTemplateId(state),
@@ -1734,8 +1947,7 @@ export class WizardStateService {
     };
     this._state.set(next);
     if (step > 0) void this.refreshCharacteristicColumns().catch(() => this._currentStep.set(0));
-    const maxStep = Math.max(0, WIZARD_STEPS.length - 1);
-    this._currentStep.set(Math.min(Math.max(0, Math.floor(step) || 0), maxStep));
+    this._currentStep.set(restoreWizardStep(step, state.wizardFlowVersion));
   }
 
   // ============ Helpers ============

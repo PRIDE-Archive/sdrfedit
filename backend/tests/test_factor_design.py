@@ -40,4 +40,4 @@ def test_technical_actions_have_correct_steps():
         {"op": "setRunFactorValue", "argsJson": '["DT run", "strategy", "DT"]'},
     ]}))
     assert not rejected and not deferred
-    assert [action.step for action in actions] == ['characteristics', 'runs-files']
+    assert [action.step for action in actions] == ['samples', 'runs-files']

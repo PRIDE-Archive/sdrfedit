@@ -15,11 +15,19 @@ a list of **wizard actions** the frontend can apply after the user approves them
 |---|---|
 | Chat orchestration with tool calling | `app/llm/agent.py`, OpenAI-compatible streaming client in `app/llm/client.py` |
 | SDRF specification Q&A (RAG) | `app/rag/` — chunked specification + embeddings, hybrid retrieval |
-| PXD dataset metadata + raw file list | `app/tools/pride.py` (PRIDE Archive v3) |
+| PXD dataset metadata + raw file list | `app/tools/pride.py` (PRIDE Archive v3); full project metadata and complete RAW names/URLs cached per session/accession and replayed on later turns without evidence summaries or output truncation |
+| Optional PRIDE technical evidence | `app/tools/pride_technical.py` — discovered file IDs, bounded mzTab/mzIdentML/mqpar extraction, session cache and paginated provenance |
 | Paper retrieval | `app/tools/literature.py` (Europe PMC search + JATS full text) |
 | Paywalled papers | `app/parsing/` — MinerU, plus `POST /api/uploads/pdf` for user-supplied PDFs |
 | Verified ontology terms | `app/tools/ontology.py` (EBI OLS4) |
 | Template layers and columns | `app/tools/templates.py` (bigbio/sdrf-templates) |
+
+Technical evidence is requested when protocol parameters lack supporting evidence,
+sources conflict, the user requests verification, or a file-to-analysis association
+is unresolved. Existing sufficient evidence is reused. Source URLs are restricted
+to the current discovered PRIDE project; arbitrary paths/URLs are not exposed to
+the model. Optional extraction failures do not by themselves block annotation.
+See [technical metadata usage and limits](scripts/TECHNICAL_METADATA.md).
 
 ## Setup
 

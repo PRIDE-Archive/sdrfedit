@@ -1,3 +1,4 @@
+import { protocolField, protocolChoiceForFile, protocolValueLabel } from '../../../core/utils/protocol-fields';
 import { TemplateService } from '../../../core/services/template.service';
 /**
  * Review & Create Component (Step 8)
@@ -143,19 +144,19 @@ import {
           </div>
           <div class="config-item">
             <span class="config-label">Instrument:</span>
-            <span class="config-value">{{ state().instrument?.label || 'Not set' }}</span>
+            <span class="config-value">{{ protocolSummary('comment[instrument]') }}</span>
           </div>
           <div class="config-item">
             <span class="config-label">Enzyme:</span>
-            <span class="config-value">{{ state().cleavageAgent?.name || 'Not set' }}</span>
+            <span class="config-value">{{ protocolSummary('comment[cleavage agent details]') }}</span>
           </div>
           <div class="config-item">
             <span class="config-label">Precursor mass tolerance:</span>
-            <span class="config-value">{{ state().precursorMassTolerance || 'Not provided' }}</span>
+            <span class="config-value">{{ protocolSummary('comment[precursor mass tolerance]') }}</span>
           </div>
           <div class="config-item">
             <span class="config-label">Fragment mass tolerance:</span>
-            <span class="config-value">{{ state().fragmentMassTolerance || 'Not provided' }}</span>
+            <span class="config-value">{{ protocolSummary('comment[fragment mass tolerance]') }}</span>
           </div>
         </div>
       </div>
@@ -588,6 +589,17 @@ export class ReviewCreateComponent {
   private readonly validator = inject(PyodideValidatorService);
 
   readonly state = this.wizardState.state;
+  protocolSummary(name: string): string {
+    const field = protocolField(this.state(), name);
+    const counts = new Map<string, number>();
+    for (const file of this.state().dataFiles) {
+      const choice = protocolChoiceForFile(field, file.fileName);
+      if (choice) counts.set(choice.id, (counts.get(choice.id) || 0) + 1);
+    }
+    return field.choices.filter(choice => counts.has(choice.id)).map(choice =>
+      protocolValueLabel(choice.value) + (counts.size > 1 ? ` (${counts.get(choice.id)} files)` : '')).join(' · ') || 'Not provided';
+  }
+
   readonly sdrfVersion = formatSdrfSemver(SDRF_SPEC_VERSION);
 
   readonly validationRunning = signal(false);
@@ -597,6 +609,7 @@ export class ReviewCreateComponent {
   readonly validationIssues = signal<ValidationError[]>([]);
 
   private lastValidatedKey = '';
+  private validationRequest = 0;
 
   private readonly templateService = inject(TemplateService);
 
@@ -672,9 +685,14 @@ export class ReviewCreateComponent {
 
   async runValidation(): Promise<void> {
     const table = this.previewTable();
-    if (!table || this.validationRunning()) return;
+    if (!table) return;
+    const request = ++this.validationRequest;
+    const key = JSON.stringify([table.metadata?.templateSnapshotId, table.columns, table.sampleCount]);
+    const isCurrent = () => request === this.validationRequest && key === JSON.stringify([this.previewTable()?.metadata?.templateSnapshotId, this.previewTable()?.columns, this.previewTable()?.sampleCount]);
 
     this.validationRunning.set(true);
+    this.validationDone.set(false);
+    this.validationIssues.set([]);
     this.validationFailed.set(false);
     this.validationErrorMessage.set('');
 
@@ -684,9 +702,11 @@ export class ReviewCreateComponent {
       if (!snapshotId) throw new Error('Template snapshot is missing. Return to template selection.');
       const errors = await this.templateService.validateTable(snapshotId, this.state().selectedTemplates || [], tsv);
 
+      if (!isCurrent()) return;
       this.validationIssues.set(errors);
       this.validationDone.set(true);
     } catch (err) {
+      if (!isCurrent()) return;
       this.validationFailed.set(true);
       this.validationDone.set(false);
       this.validationIssues.set([]);
@@ -694,7 +714,7 @@ export class ReviewCreateComponent {
         err instanceof Error ? err.message : 'Validation service unavailable'
       );
     } finally {
-      this.validationRunning.set(false);
+      if (request === this.validationRequest) this.validationRunning.set(false);
     }
   }
 

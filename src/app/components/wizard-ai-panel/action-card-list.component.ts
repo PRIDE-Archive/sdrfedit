@@ -21,11 +21,13 @@ interface CardGroup {
   pending: WizardActionCard[];
 }
 
-type LayerKind = 'technology' | 'sample' | 'experiment' | 'count' | 'description' | 'generic';
+type LayerKind = 'technology' | 'sample' | 'experiment' | 'count' | 'description' | 'attribute' | 'generic';
 
 const OP_LAYER: Record<string, LayerKind> = {
   setTechnologyTemplate: 'technology',
   setSampleTemplate: 'sample',
+  setSampleTemplates: 'sample',
+  applyCharacteristicDraft: 'attribute',
   setExperimentTemplates: 'experiment',
   setSampleCount: 'count',
   setExperimentDescription: 'description',
@@ -39,6 +41,7 @@ const LAYER_LABEL: Record<LayerKind, string> = {
   experiment: 'Experiment',
   count: 'Samples',
   description: 'Notes',
+  attribute: 'Sample attribute',
   generic: 'Suggestion',
 };
 
@@ -79,6 +82,15 @@ const LAYER_LABEL: Record<LayerKind, string> = {
               <span class="diff-label">Change</span>
               <code>{{ preview(card) }}</code>
             </div>
+
+            @if (card.replacesCardId) {
+              <p class="state">Repair for {{ card.replacesCardId }}</p>
+            }
+            @if (card.executionState === 'rolled-back') {
+              <p class="state">Rolled back because another card failed. Original recommendation retained.</p>
+            } @else if (card.executionState === 'not-executed') {
+              <p class="state">Not executed: waiting for the failed card to be repaired.</p>
+            }
 
             @if (card.action.reasoning) {
               <p class="card-why">
@@ -122,7 +134,11 @@ const LAYER_LABEL: Record<LayerKind, string> = {
               >
                 Ask
               </button>
-              @if (card.status === 'pending') {
+              @if (card.executionState === 'superseded') {
+                <span class="state dismissed">Replaced by {{ card.replacedByCardId }}</span>
+              } @else if (card.executionState === 'repair-rejected') {
+                <span class="state failed">Repair not applied: {{ card.error }}</span>
+              } @else if (card.status === 'pending') {
                 <button class="dismiss" (click)="dismiss.emit(card)">Dismiss</button>
                 <button class="apply" [disabled]="!!importDependency(card)" (click)="apply.emit(card)">Apply</button>
               } @else if (card.status === 'applied') {

@@ -13,6 +13,9 @@ import {
   OnInit,
   ChangeDetectionStrategy,
   signal,
+  afterRenderEffect,
+  viewChild,
+  ElementRef,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 
@@ -25,7 +28,6 @@ import { TemplateService } from '../../core/services/template.service';
 
 // Step components
 import { ExperimentSetupComponent } from './steps/experiment-setup.component';
-import { SampleCharacteristicsComponent } from './steps/sample-characteristics.component';
 import { SampleValuesComponent } from './steps/sample-values.component';
 import { RunsFilesComponent } from './steps/runs-files.component';
 import { InstrumentProtocolComponent } from './steps/instrument-protocol.component';
@@ -38,7 +40,6 @@ import { WizardAiPanelComponent } from '../wizard-ai-panel/wizard-ai-panel.compo
   imports: [
     CommonModule,
     ExperimentSetupComponent,
-    SampleCharacteristicsComponent,
     SampleValuesComponent,
     RunsFilesComponent,
     InstrumentProtocolComponent,
@@ -94,7 +95,7 @@ import { WizardAiPanelComponent } from '../wizard-ai-panel/wizard-ai-panel.compo
         </div>
 
         <!-- Step Content -->
-        <div class="wizard-content" [attr.inert]="autoAnnotation.active() ? '' : null" [attr.aria-busy]="autoAnnotation.active()">
+        <div #wizardContent class="wizard-content" [attr.inert]="autoAnnotation.active() ? '' : null" [attr.aria-busy]="autoAnnotation.active()">
           @switch (wizardState.currentStep()) {
             @case (0) {
               <wizard-experiment-setup
@@ -103,18 +104,15 @@ import { WizardAiPanelComponent } from '../wizard-ai-panel/wizard-ai-panel.compo
               />
             }
             @case (1) {
-              <wizard-sample-characteristics [aiEnabled]="aiEnabled" />
-            }
-            @case (2) {
               <wizard-sample-values [aiEnabled]="aiEnabled" />
             }
-            @case (3) {
+            @case (2) {
               <wizard-runs-files [aiEnabled]="aiEnabled" />
             }
-            @case (4) {
+            @case (3) {
               <wizard-instrument-protocol [aiEnabled]="aiEnabled" />
             }
-            @case (5) {
+            @case (4) {
               <wizard-review-create
                 [aiEnabled]="aiEnabled"
                 (createTable)="onCreate($event)"
@@ -143,7 +141,7 @@ import { WizardAiPanelComponent } from '../wizard-ai-panel/wizard-ai-panel.compo
               [disabled]="!wizardState.canProceed()"
               (click)="wizardState.nextStep()"
             >
-              Next
+              Next: {{ wizardState.steps[wizardState.currentStep() + 1].title }}
             </button>
           } @else {
             <button
@@ -482,11 +480,23 @@ export class SdrfWizardComponent implements OnInit {
   readonly templateService = inject(TemplateService);
   private readonly chatHistory = inject(ChatHistoryService);
 
+  private readonly wizardContent = viewChild<ElementRef<HTMLElement>>('wizardContent');
+
   constructor() {
     // Creating a new SDRF must not implicitly restore the previous chat's draft.
     // Historical drafts remain available through explicit chat-history selection.
     this.chatHistory.create();
     this.wizardState.reset();
+    // Reset the shared scroll container after a new step has rendered, including
+    // navigation initiated by the assistant or restoration of a saved draft.
+    afterRenderEffect(() => {
+      this.wizardState.currentStep();
+      const content = this.wizardContent()?.nativeElement;
+      if (content) {
+        content.scrollTop = 0;
+        content.scrollLeft = 0;
+      }
+    });
   }
 
   ngOnInit(): void {

@@ -1,3 +1,6 @@
+import { characteristicValueError } from '../../models/wizard';
+import { PROTOCOL_COLUMNS, protocolColumns, protocolField, protocolCompletionErrors } from '../../utils/protocol-fields';
+import { planProtocolValue } from '../../utils/protocol-actions';
 /**
  * Bridge between assistant suggestions and the wizard state.
  *
@@ -10,26 +13,30 @@
  * Called by manual Apply or by an explicitly started automatic annotation run.
  */
 
-import { normalizeMassTolerance } from '../../utils/mass-tolerance';
+import { genericTemplateColumns, templateFieldValue, templateOptions } from '../../utils/template-fields';
 
 import { Injectable, inject } from '@angular/core';
 
 import { WizardAction, WizardSnapshot } from '../../models/assistant';
-import { factorCandidates, factorDefinitionErrors, LABEL_CONFIGS, WizardModification, WIZARD_STEPS, resolveRunSampleIndices } from '../../models/wizard';
+import { getSpecialtyCharacteristicKey, isWizardSkippedCharacteristic, factorCandidates, factorDefinitionErrors, LABEL_CONFIGS, WIZARD_STEPS, resolveRunSampleIndices } from '../../models/wizard';
 import { WizardStateService } from '../wizard-state.service';
 import { TemplateService } from '../template.service';
 import {
   WizardActionError,
+  validateActionArgs,
+  asAssignments,
+  asProtocolValue,
+  asProtocolScope,
   asAcquisitionMethod,
+  asBiologicalReplicates,
+  asFileUrls,
+  asCharacteristicDraft,
   asBoolean,
-  asCleavageAgent,
   asFactor,
   asFactors,
-  asModifications,
   asNamedRunFileAssignments,
   asNumber,
   asNumberArray,
-  asOntologyTerm,
   asString,
   asStringArray,
   optionalOntologyTerm,
@@ -49,13 +56,13 @@ export class WizardAiBridgeService {
   }
 
   stepIndexOf(action: WizardAction): number {
-    const index = WIZARD_STEPS.findIndex(step => step.id === action.step);
+    const index = WIZARD_STEPS.findIndex(step => step.id === (action.step === 'characteristics' ? 'samples' : action.step));
     return index >= 0 ? index : 0;
   }
 
   // ------------------------------------------------------------------ snapshot
 
-  buildSnapshot(includeAssignments = false): WizardSnapshot {
+  buildSnapshot(includeAssignments = true): WizardSnapshot {
     const state = this.wizardState.getState();
     const stepIndex = this.wizardState.currentStep();
 
@@ -87,9 +94,10 @@ export class WizardAiBridgeService {
     const msRunSummaries = (state.msRuns || []).map(run => ({
       name: run.name,
       factorValues: run.factorValues || {},
+      sampleMappingMode: run.sampleMappingMode,
       labelConfigId: run.labelConfigId || state.labelConfigId,
-      channels: run.channels.map(ch => ({label: ch.label, role: ch.role, sourceName: samplesByIndex.get(ch.sampleIndex ?? -1)?.sourceName})),
-      files: state.dataFiles.filter(f => f.runId === run.id).map(f => ({fileName: f.fileName, fractionId: f.fractionId ?? 1, technicalReplicate: f.technicalReplicate ?? 1})),
+      channels: run.channels.map(ch => ({label: ch.label, role: ch.role, mappingId: ch.mappingId, pooledSourceNames: (ch.pooledSampleIndices || []).map(index => samplesByIndex.get(index)?.sourceName || ''), sourceNameOverride: ch.sourceNameOverride, sourceName: samplesByIndex.get(ch.sampleIndex ?? -1)?.sourceName})),
+      files: state.dataFiles.filter(f => f.runId === run.id).map(f => ({fileName: f.fileName, mappingId: f.mappingId, sourceName: samplesByIndex.get(f.sampleIndex ?? -1)?.sourceName, fractionId: f.fractionId ?? 1, technicalReplicate: f.technicalReplicate ?? 1})),
       sampleSourceNames: resolveRunSampleIndices(run)
         .map(index => samplesByIndex.get(index)?.sourceName?.trim() || '')
         .filter(Boolean),
@@ -111,10 +119,23 @@ export class WizardAiBridgeService {
       experimentTemplates: state.experimentTemplates || [],
       sampleCount: state.sampleCount,
       experimentDescription: state.experimentDescription || '',
-      characteristicColumns: (state.characteristicColumns || []).map(column => ({
+      characteristicColumns: (state.characteristicColumns || []).filter(column =>
+        !isWizardSkippedCharacteristic(column.name) && getSpecialtyCharacteristicKey(column.name) !== 'material type'
+      ).map(column => ({
         name: column.name,
         requirement: column.requirement || 'optional',
         ontologies: column.ontologies || [],
+      })),
+      protocolFields: Object.fromEntries(protocolColumns(state).map(column => [column.name, structuredClone(protocolField(state, column.name))])),
+      protocolIssues: protocolCompletionErrors(state),
+      protocolColumns: protocolColumns(state).map(column => ({
+        name: column.name, requirement: column.requirement || 'optional',
+      })),
+      genericProtocolFields: protocolColumns(state).filter(column => genericTemplateColumns(state).some(c => c.name === column.name)).map(column => ({
+        name: column.name, requirement: column.requirement || 'optional', description: column.description || '',
+        value: templateFieldValue(state, column), options: templateOptions(column),
+        type: column.type, validators: column.validators || [],
+        allowNotAvailable: column.allowNotAvailable, allowNotApplicable: column.allowNotApplicable,
       })),
       characteristicChoices: choices,
       sampleSourceNames: (state.samples || []).map(sample => sample.sourceName),
@@ -127,6 +148,7 @@ export class WizardAiBridgeService {
       biologicalReplicates: (state.samples || []).map(sample => sample.biologicalReplicate),
       multiValueCharacteristicColumns,
       labelConfigId: state.labelConfigId ?? null,
+      availableLabelConfigs: LABEL_CONFIGS.map(config => ({ ...config, labels: [...config.labels] })),
       msRunCount: (state.msRuns || []).length,
       msRunSummaries,
       dataFileCount: state.dataFiles.length,
@@ -152,25 +174,79 @@ export class WizardAiBridgeService {
     };
   }
 
+  private protocolActionPlan(op: string, args: unknown[]) {
+    const legacyNames: Record<string, string> = {
+      setInstrument: PROTOCOL_COLUMNS.instrument, setCleavageAgent: PROTOCOL_COLUMNS.cleavageAgent,
+      setModifications: PROTOCOL_COLUMNS.modifications, setPrecursorMassTolerance: PROTOCOL_COLUMNS.precursorMassTolerance,
+      setFragmentMassTolerance: PROTOCOL_COLUMNS.fragmentMassTolerance,
+    };
+    const scoped = op === 'setProtocolValue';
+    const generic = op === 'setTemplateValue';
+    if (!scoped && !generic && !legacyNames[op]) return null;
+    const name = scoped || generic ? asString(args[0]).trim() : legacyNames[op];
+    try {
+      if (generic && !genericTemplateColumns(this.wizardState.getState()).some(column => column.name === name)) {
+        throw new Error(`No editable protocol field named ${name} in the selected templates.`);
+      }
+      const value = asProtocolValue(name, args[scoped || generic ? 1 : 0]);
+      const scope = scoped ? asProtocolScope(args[2]) : 'all';
+      return { name, ...planProtocolValue(this.wizardState.getState(), name, value, scope, !scoped) };
+    } catch (error) {
+      throw new WizardActionError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  private validateCharacteristicAction(op: string, args: unknown[]): void {
+    if (op === 'applyCharacteristicDraft') {
+      const { column, choices } = asCharacteristicDraft(args);
+      if (!this.wizardState.getState().characteristicColumns.some(c => c.name === column)) throw new WizardActionError('This attribute is no longer available.');
+      for (const choice of choices) {
+        const error = characteristicValueError(this.wizardState.getState(), column, choice.value);
+        if (error) throw new WizardActionError(error);
+      }
+      return;
+    }
+    if (!['addCharacteristicChoice', 'setSampleCharacteristicValue'].includes(op)) return;
+    const state = this.wizardState.getState();
+    const name = asString(args[op === 'addCharacteristicChoice' ? 0 : 1]);
+    const value = asString(args[op === 'addCharacteristicChoice' ? 1 : 2]).trim();
+    const error = characteristicValueError(state, name, value);
+    // Clearing an assignment is allowed; unknown fields never are.
+    if (error && (value || !state.characteristicColumns.some(c => c.name === name))) throw new WizardActionError(error);
+    if (op === 'setSampleCharacteristicValue' && value && !this.wizardState.getChoices(name).some(c => c.value.trim().toLowerCase() === value.toLowerCase())) {
+      throw new WizardActionError('Choose sample values from the defined options.');
+    }
+  }
+
   // ------------------------------------------------------------------- preview
 
   /** Complete "current → proposed" description for a suggestion card. */
   previewAction(action: WizardAction): string {
     const state = this.wizardState.getState();
-    const args = action.args || [];
-
     try {
+      const args = validateActionArgs(action.op, action.args, state.sampleCount);
+      this.validateCharacteristicAction(action.op, args);
+      const protocolPlan = this.protocolActionPlan(action.op, args);
+      if (protocolPlan) return protocolPlan.preview;
       switch (action.op) {
         case 'setTechnologyTemplate':
           return change(state.technologyTemplate, asString(args[0]));
         case 'setSampleTemplate':
           return change(state.sampleTemplate, args[0] === null ? "(none — generic sample)" : asString(args[0]));
+        case 'setSampleTemplates':
+          return change([state.sampleTemplate, ...(state.sampleMetadataTemplates || [])].filter(Boolean).join(', '), asStringArray(args[0]).join(', '));
         case 'setExperimentTemplates':
           return change((state.experimentTemplates || []).join(', ') || '(none)', asStringArray(args[0]).join(', '));
         case 'setSampleCount':
           return change(String(state.sampleCount), String(asNumber(args[0])));
         case 'setExperimentDescription':
           return change(state.experimentDescription, asString(args[0]));
+        case 'applyCharacteristicDraft': {
+          const { column, choices, assignments } = asCharacteristicDraft(args);
+          const sampleNames = state.samples.map(sample => sample.sourceName);
+          return `${column}: ${choices.map(choice => choice.value).join(', ') || '(no values)'}\n`
+            + assignments.map((value, i) => `${sampleNames[i] || 'Sample ' + (i + 1)}: ${state.samples[i]?.characteristicValues?.[column] || '(unassigned)'} → ${value || '(unassigned)'}`).join('\n');
+        }
         case 'addCharacteristicChoice': {
           const column = asString(args[0]);
           const existing = this.wizardState.getChoices(column).map(choice => choice.value);
@@ -199,7 +275,7 @@ export class WizardAiBridgeService {
           return `Set ${names.length} source names:\n${names.map((name, index) => `${index + 1}. ${name}`).join('\n')}`;
         }
         case 'setBiologicalReplicates': {
-          const reps = asNumberArray(args[0]);
+          const reps = asBiologicalReplicates(args, state.sampleCount);
           const unique = new Set(reps).size;
           return `Set biological replicates for ${reps.length} samples (${unique} distinct number${
             unique === 1 ? '' : 's'
@@ -208,17 +284,17 @@ export class WizardAiBridgeService {
         case 'setLabelConfig':
           return change(labelName(state.labelConfigId), labelName(asString(args[0])));
         case 'applyRunsFilesPlan': {
-          const plan = args[0] as {groups: {name: string; labelConfigId: string; channels: {label: string; sourceName: string}[]; factorValues?: Record<string,string>; files: {fileName: string; fractionId: number; technicalReplicate: number}[]}[]};
+          const plan = args[0] as {groups: {name: string; labelConfigId: string; channels: {label: string; sourceName?: string; mappingId?: string; pooledSourceNames?: string[]}[]; factorValues?: Record<string,string>; files: {fileName: string; mappingId?: string; fractionId: number; technicalReplicate: number}[]}[]};
           return plan.groups.map(group => {
             const existing = state.msRuns.find(r => r.name === group.name);
             const before = existing ? `Current: ${existing.channels.map(c => `${c.label} → ${state.samples.find(s => s.index === c.sampleIndex)?.sourceName || c.role}`).join(', ')}; factors ${JSON.stringify(existing.factorValues || {})}\n` : '';
             return `${existing ? 'Update' : 'Create'} group ${group.name} (${labelName(group.labelConfigId)})\n${before}` +
-              group.channels.map(c => `${c.label} → ${c.sourceName}`).join('\n') + '\n' +
+              group.channels.map(c => `${c.label}${c.mappingId ? ' [' + c.mappingId + ']' : ''} → ${c.pooledSourceNames?.length ? 'pool: ' + c.pooledSourceNames.join(' + ') : c.sourceName}`).join('\n') + '\n' +
               Object.entries(group.factorValues || {}).map(([k,v]) => `${k}: ${v}`).join('\n') + '\n' +
               group.files.map(f => {
                 const old = state.dataFiles.find(old => old.fileName === f.fileName);
                 const oldGroup = state.msRuns.find(r => r.id === old?.runId)?.name || 'pool';
-                return `${f.fileName}: ${oldGroup} (F=${old?.fractionId ?? 1}, Tech=${old?.technicalReplicate ?? 1}) → ${group.name} (F=${f.fractionId}, Tech=${f.technicalReplicate})`;
+                return `${f.fileName}: ${oldGroup} (F=${old?.fractionId ?? 1}, Tech=${old?.technicalReplicate ?? 1}) → ${group.name}${f.mappingId ? ' [' + f.mappingId + ']' : ''} (F=${f.fractionId}, Tech=${f.technicalReplicate})`;
               }).join('\n');
           }).join('\n\n');
         }
@@ -226,7 +302,8 @@ export class WizardAiBridgeService {
           return `Pack unassigned samples, preserving existing groups, using ${labelName(state.labelConfigId)}`;
         case 'replaceWithUnassignedFileNames': {
           const names = asStringArray(args[0]);
-          return `Replace unassigned pool (preserve assigned files) with ${names.length} file(s):\n${names.join('\n')}`;
+          const urls = asFileUrls(args[1]);
+          return `Replace unassigned pool (preserve assigned files) with ${names.length} file(s):\n${names.map(name => urls[name] ? `${name} → ${urls[name]}` : name).join('\n')}`;
         }
         case 'assignDataFilesToRun': {
           const indices = asNumberArray(args[0]);
@@ -248,31 +325,6 @@ export class WizardAiBridgeService {
           return change(String(state.technicalReplicates), String(asNumber(args[0])));
         case 'setAcquisitionMethod':
           return change(state.acquisitionMethod, asAcquisitionMethod(args[0]));
-        case 'setInstrument': {
-          const term = asOntologyTerm(args[0]);
-          return change(
-            state.instrument ? `${state.instrument.label} (${state.instrument.id})` : null,
-            `${term.label} (${term.id})`
-          );
-        }
-        case 'setCleavageAgent': {
-          const agent = asCleavageAgent(args[0]);
-          return change(
-            state.cleavageAgent ? `${state.cleavageAgent.name} (${state.cleavageAgent.msAccession})` : null,
-            `${agent.name} (${agent.msAccession})`
-          );
-        }
-        case 'setPrecursorMassTolerance':
-          return change(state.precursorMassTolerance || '(not provided)', normalizeMassTolerance(args[0]) || '(not provided)');
-        case 'setFragmentMassTolerance':
-          return change(state.fragmentMassTolerance || '(not provided)', normalizeMassTolerance(args[0]) || '(not provided)');
-        case 'setModifications': {
-          const modifications = asModifications(args[0]);
-          return change(
-            state.modifications.map(describeModification).join('; ') || '(none)',
-            modifications.map(describeModification).join('; ') || '(none)'
-          );
-        }
         case 'setNoStudyFactors':
           return `Disable study factors and continue without them. Reason: ${asString(args[0])}`;
         case 'setRunFactorValue':
@@ -298,7 +350,7 @@ export class WizardAiBridgeService {
           return `Add candidate "${asString(args[1])}" to factor "${asString(args[0])}"`;
         case 'setFactorColumnValues': {
           const factorName = asString(args[0]);
-          const values = asStringArray(args[1]);
+          const values = asAssignments(args[1]);
           return `Set factor "${factorName}" for ${values.length} samples:\n${values.map((value, index) => `${index + 1}. ${value}`).join('\n')}`;
         }
         case 'setSampleFactorValue': {
@@ -320,11 +372,17 @@ export class WizardAiBridgeService {
   /** Validate and apply one approved action. Throws `WizardActionError` on bad input. */
   async applyAction(action: WizardAction, signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted();
-    const args = action.args || [];
-    if (['setTechnologyTemplate', 'setSampleTemplate', 'setExperimentTemplates'].includes(action.op)) {
+    const args = validateActionArgs(action.op, action.args, this.wizardState.getState().sampleCount);
+    this.validateCharacteristicAction(action.op, args);
+    const protocolPlan = this.protocolActionPlan(action.op, args);
+    if (protocolPlan) {
+      this.wizardState.setProtocolField(protocolPlan.name, protocolPlan.field);
+      return;
+    }
+    if (['setTechnologyTemplate', 'setSampleTemplate', 'setSampleTemplates', 'setExperimentTemplates'].includes(action.op)) {
       const names = action.op === 'setSampleTemplate' && args.length === 1 && args[0] === null
-        ? [] : action.op === 'setExperimentTemplates' ? asStringArray(args[0]) : [asString(args[0])];
-      const allowed = action.op === 'setTechnologyTemplate' ? ['technology'] : action.op === 'setSampleTemplate' ? ['sample'] : ['experiment', 'sample'];
+        ? [] : ['setExperimentTemplates', 'setSampleTemplates'].includes(action.op) ? asStringArray(args[0]) : [asString(args[0])];
+      const allowed = action.op === 'setTechnologyTemplate' ? ['technology'] : ['setSampleTemplate', 'setSampleTemplates'].includes(action.op) ? ['sample'] : ['experiment'];
       for (const name of names) {
         const info = this.templates.getTemplateInfo(name);
         if (!info || !allowed.includes(info.layer || '')) throw new WizardActionError(`Unknown template or incorrect layer: ${name}`);
@@ -345,6 +403,11 @@ export class WizardAiBridgeService {
         await this.wizardState.refreshCharacteristicColumns(signal);
         return;
 
+      case 'setSampleTemplates':
+        this.wizardState.setSampleTemplates(asStringArray(args[0]));
+        await this.wizardState.refreshCharacteristicColumns(signal);
+        return;
+
       case 'setExperimentTemplates':
         this.wizardState.setExperimentTemplates(asStringArray(args[0]));
         await this.wizardState.refreshCharacteristicColumns(signal);
@@ -357,6 +420,12 @@ export class WizardAiBridgeService {
       case 'setExperimentDescription':
         this.wizardState.setExperimentDescription(asString(args[0]));
         return;
+
+      case 'applyCharacteristicDraft': {
+        const { column, choices, assignments } = asCharacteristicDraft(args);
+        this.wizardState.applyCharacteristicDraft(column, choices, 'explicit', assignments);
+        return;
+      }
 
       case 'addCharacteristicChoice': {
         const column = asString(args[0]);
@@ -417,17 +486,9 @@ export class WizardAiBridgeService {
       }
 
       case 'setBiologicalReplicates': {
+        const reps = asBiologicalReplicates(args, this.wizardState.getState().sampleCount);
         this.wizardState.ensureSamplesInitialized();
-        const reps = asNumberArray(args[0]);
         const samples = this.wizardState.getState().samples;
-        if (reps.length !== samples.length) {
-          throw new WizardActionError(
-            `Expected ${samples.length} biological replicate numbers, got ${reps.length}.`
-          );
-        }
-        if (reps.some(value => value < 1)) {
-          throw new WizardActionError('Biological replicate numbers must be integers >= 1.');
-        }
         this.wizardState.setSamples(
           samples.map((sample, index) => ({
             ...sample,
@@ -458,7 +519,7 @@ export class WizardAiBridgeService {
         return;
 
       case 'replaceWithUnassignedFileNames':
-        this.wizardState.replaceWithUnassignedFileNames(asStringArray(args[0]));
+        this.wizardState.replaceWithUnassignedFileNames(asStringArray(args[0]), asFileUrls(args[1]));
         return;
 
       case 'assignDataFilesToRun': {
@@ -516,24 +577,6 @@ export class WizardAiBridgeService {
         this.wizardState.setAcquisitionMethod(asAcquisitionMethod(args[0]));
         return;
 
-      case 'setInstrument':
-        this.wizardState.setInstrument(asOntologyTerm(args[0]));
-        return;
-
-      case 'setCleavageAgent':
-        this.wizardState.setCleavageAgent(asCleavageAgent(args[0]));
-        return;
-
-      case 'setPrecursorMassTolerance':
-        this.wizardState.setPrecursorMassTolerance(normalizeMassTolerance(args[0]));
-        return;
-      case 'setFragmentMassTolerance':
-        this.wizardState.setFragmentMassTolerance(normalizeMassTolerance(args[0]));
-        return;
-      case 'setModifications':
-        this.wizardState.setModifications(asModifications(args[0]));
-        return;
-
       case 'setNoStudyFactors': {
         const reason = asString(args[0]).trim();
         if (!reason) throw new WizardActionError('Explain why no study factors are being encoded.');
@@ -565,7 +608,7 @@ export class WizardAiBridgeService {
 
       case 'setFactorColumnValues': {
         const factorName = asString(args[0]);
-        const values = asStringArray(args[1]);
+        const values = asAssignments(args[1]);
         const count = this.wizardState.getState().samples.length;
         if (values.length !== count) {
           throw new WizardActionError(
@@ -608,9 +651,4 @@ function change(current: string | null | undefined, proposed: string): string {
 
 function labelName(configId: string | null | undefined): string {
   return LABEL_CONFIGS.find(config => config.id === configId)?.name || configId || '(none)';
-}
-
-function describeModification(modification: WizardModification): string {
-  const accession = modification.unimodAccession ? ` ${modification.unimodAccession}` : '';
-  return `${modification.name}${accession} (${modification.type}, ${modification.targetAminoAcids})`;
 }

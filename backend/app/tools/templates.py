@@ -1,4 +1,5 @@
 """Assistant adapters over the same commit-pinned catalogue as the wizard."""
+import json
 from contextvars import ContextVar
 from ..template_catalog import get_catalog, CatalogError
 from .http import ToolHttpError
@@ -41,7 +42,10 @@ async def list_templates(layer: str | None = None) -> dict:
                 'Internal templates are inherited; do not select them directly.',
             ]}
 
-async def get_template_columns(name: str, version: str | None = None, include_inherited: bool = True) -> dict:
+async def get_template_columns(name: str, version: str | None = None, include_inherited: bool = True,
+                               offset: int = 0, limit: int = 20) -> dict:
+    if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 100:
+        raise ToolHttpError("offset must be a non-negative integer; limit must be between 1 and 100.")
     snapshot = await _snapshot()
     if name not in snapshot.manifest: raise ToolHttpError(f'Unknown template: {name}')
     version = version or snapshot.manifest[name]['latest']
@@ -49,18 +53,33 @@ async def get_template_columns(name: str, version: str | None = None, include_in
     if not result['valid']: raise ToolHttpError(' '.join(result['errors']))
     doc = snapshot.doc(name, version)
     raw_columns = result['columns'] if include_inherited else doc['columns']
-    columns = [{**col,
+    columns = [{**{key: value for key, value in col.items() if key != 'provenance'},
         'ontologies': _ontologies_from_validators(col),
         'allowNotAvailable': col.get('allow_not_available', False),
         'allowNotApplicable': col.get('allow_not_applicable', False),
     } for col in raw_columns]
-    return {'snapshotId': snapshot.snapshot_id, 'name': name, 'version': version, 'layer': doc.get('layer'),
+    response = {'snapshotId': snapshot.snapshot_id, 'name': name, 'version': version, 'layer': doc.get('layer'),
             'description': doc.get('description', ''), 'documentation': doc.get('documentation', ''),
             'mutuallyExclusiveWith': doc.get('mutually_exclusive_with', []),
             'inheritanceChain': [ref['name'] for ref in result['resolvedTemplates']],
             'columns': columns,
             'requiredColumns': [c['name'] for c in columns if c.get('requirement') == 'required'],
             'recommendedColumns': [c['name'] for c in columns if c.get('requirement') == 'recommended']}
+    # Keep complete column definitions but omit repeated provenance URLs. Bound the
+    # page by serialized size as well as count, below the dispatcher output cap.
+    response.update(columns=[], totalColumns=len(columns), offset=offset, nextOffset=None)
+    for column in columns[offset:offset + limit]:
+        response['columns'].append(column)
+        response['nextOffset'] = offset + len(response['columns'])
+        if response['nextOffset'] >= len(columns):
+            response['nextOffset'] = None
+        if len(json.dumps(response, ensure_ascii=False, default=str)) > 22000:
+            response['columns'].pop()
+            response['nextOffset'] = offset + len(response['columns'])
+            if not response['columns']:
+                raise ToolHttpError(f"Column {column['name']} exceeds the template-column page budget.")
+            break
+    return response
 
 async def validate_combination(technology: str | None, sample: str | None,
                                experiments: list[str] | None = None, sample_metadata: list[str] | None = None) -> dict:

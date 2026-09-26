@@ -305,3 +305,21 @@ async def test_heading_labels_never_determine_proposal_eligibility(monkeypatch, 
     assert status[heading.lower()]['readRanges'] == [(0, 10)]
     assert status['unrelated appendix']['readChars'] == 0
     assert doc.unread_sections()[heading.lower()] == 10
+
+
+async def test_multiple_sample_templates_use_real_layers_and_can_clear(monkeypatch):
+    gate = SetupGate(SessionStore(), "s", "PXD1", pride_only=True)
+    gate.observe("get_pride_metadata", {"accession": "PXD1"})
+    monkeypatch.setattr(templates, "_load_manifest", AsyncMock(return_value={"templates": {
+        "human": {"layer": "sample"}, "cell-lines": {"layer": "sample"},
+        "dia-acquisition": {"layer": "experiment"},
+    }}))
+    for args in ([["human", "cell-lines"]], [[]], ["human", "cell-lines"]):
+        parsed, rejected, deferred = action("setSampleTemplates", args)
+        assert not rejected and not deferred
+        kept, rejected = await gate.filter(parsed)
+        assert kept and not rejected
+    kept, rejected = await gate.filter(action("setSampleTemplates", [["dia-acquisition"]])[0])
+    assert not kept and rejected
+    kept, rejected = await gate.filter(action("setExperimentTemplates", [["cell-lines"]])[0])
+    assert not kept and rejected

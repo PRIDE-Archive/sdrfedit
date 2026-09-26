@@ -4,9 +4,9 @@ Papers are large; re-sending them on every turn would blow the context window.
 Instead the parsed text lives here and the agent pulls the sections it needs by
 `documentId`.
 
-The store also keeps a short digest of what the tools already found. Because the
-assistant advises one wizard step at a time, it would otherwise re-fetch PRIDE
-and the paper on every step; the digest is replayed into the prompt instead.
+PRIDE project metadata and RAW catalogues are cached and replayed in full,
+without summarization.
+Other tools keep short evidence notes or document handles for later steps.
 Entries expire after SESSION_TTL_SECONDS.
 """
 
@@ -14,6 +14,9 @@ from __future__ import annotations
 
 import time
 import uuid
+import asyncio
+from copy import deepcopy
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from .config import get_settings
@@ -77,6 +80,65 @@ class SessionStore:
         self._setup_context: dict[tuple[str, str | None], tuple[float, dict]] = {}
         self._evidence: dict[str, dict[str, EvidenceNote]] = {}
         self._pdf_sources: dict[str, dict[str, tuple[str, float, dict]]] = {}
+        self._technical_metadata: dict[tuple[str, str], tuple[float, dict]] = {}
+        self._pride_metadata: dict[tuple[str, str], tuple[float, dict]] = {}
+        self._pride_requests: dict[tuple[str, str], asyncio.Task] = {}
+        self._pride_raw_files: dict[tuple[str, str], tuple[float, dict]] = {}
+        self._pride_raw_requests: dict[tuple[str, str], asyncio.Task] = {}
+
+    def pride_raw_files(self, session_id: str, accession: str | None = None) -> list[dict]:
+        self._evict()
+        return [deepcopy(result) for (sid, acc), (_, result) in self._pride_raw_files.items()
+                if sid == session_id and (accession is None or acc == accession)]
+
+    async def fetch_pride_raw_files(self, session_id: str, accession: str,
+                                    fetch: Callable[[str], Awaitable[dict]]) -> dict:
+        return await self._fetch_pride_result(session_id, accession, fetch,
+                                             self._pride_raw_files, self._pride_raw_requests)
+
+    def pride_metadata(self, session_id: str, accession: str | None = None) -> list[dict]:
+        """Full tool results for replay, independent of the lossy evidence notes."""
+        self._evict()
+        return [deepcopy(result) for (sid, acc), (_, result) in self._pride_metadata.items()
+                if sid == session_id and (accession is None or acc == accession)]
+
+    async def fetch_pride_metadata(self, session_id: str, accession: str,
+                                   fetch: Callable[[str], Awaitable[dict]]) -> dict:
+        return await self._fetch_pride_result(session_id, accession, fetch,
+                                             self._pride_metadata, self._pride_requests)
+
+    async def _fetch_pride_result(self, session_id, accession, fetch, cache, requests) -> dict:
+        self._evict()
+        key = (session_id, accession)
+        if key in cache:
+            return deepcopy(cache[key][1])
+
+        async def load():
+            try:
+                result = await fetch(accession)
+                if not result.get('error') and result.get('ok') is not False:
+                    cache[key] = (time.time(), deepcopy(result))
+                return result
+            finally:
+                requests.pop(key, None)
+
+        if key not in requests:
+            requests[key] = asyncio.create_task(load())
+        return deepcopy(await asyncio.shield(requests[key]))
+
+    def technical_context(self, session_id: str, accession: str) -> dict:
+        self._evict()
+        return self._technical_metadata.get((session_id, accession), (0, {}))[1]
+
+    def save_technical_context(self, session_id: str, accession: str, context: dict) -> None:
+        self._evict()
+        self._technical_metadata[(session_id, accession)] = (time.time(), context)
+        # A wizard session rarely needs several projects; bound retained file evidence.
+        keys = [key for key in self._technical_metadata if key[0] == session_id]
+        while len(keys) > 4:
+            oldest = min(keys, key=lambda key: self._technical_metadata[key][0])
+            del self._technical_metadata[oldest]
+            keys.remove(oldest)
 
     def setup_context(self, session_id: str, accession: str | None) -> dict:
         self._evict()
@@ -167,6 +229,15 @@ class SessionStore:
     def _evict(self) -> None:
         ttl = get_settings().session_ttl_seconds
         cutoff = time.time() - ttl
+        for key, (created_at, _) in list(self._pride_raw_files.items()):
+            if created_at < cutoff:
+                del self._pride_raw_files[key]
+        for key, (created_at, _) in list(self._pride_metadata.items()):
+            if created_at < cutoff:
+                del self._pride_metadata[key]
+        for key, (created_at, _) in list(self._technical_metadata.items()):
+            if created_at < cutoff:
+                del self._technical_metadata[key]
         for key, (created_at, _) in list(self._setup_context.items()):
             if created_at < cutoff:
                 del self._setup_context[key]

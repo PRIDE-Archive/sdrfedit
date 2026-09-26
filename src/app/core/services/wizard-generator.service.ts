@@ -1,3 +1,4 @@
+import { PROTOCOL_COLUMNS, protocolChoiceForFile, protocolOutputValue } from '../utils/protocol-fields';
 /**
  * Wizard Generator Service
  *
@@ -10,6 +11,7 @@ import { normalizeMassTolerance } from '../utils/mass-tolerance';
 import { Injectable, inject } from '@angular/core';
 import {
   WizardState,
+  canonicalLabel,
   assayNameForFile,
   WizardModification,
   WizardFactor,
@@ -224,6 +226,7 @@ export class WizardGeneratorService {
     }
 
     if (state.templateSnapshotId) this.applyEffectiveSchema(table, state);
+    this.applyProtocolAssignments(table, state);
     const accession = state.projectAccession?.match(/^PXD\d+$/i)?.[0]?.toUpperCase();
     if (accession) table.metadata = { ...table.metadata, filename: `${accession}.sdrf.tsv` };
     return table;
@@ -499,7 +502,7 @@ export class WizardGeneratorService {
   }
 
   private createLabelColumn(state: WizardState, position: number): SdrfColumn {
-    const { value, modifiers } = this.modsFromRows(r => r.label);
+    const { value, modifiers } = this.modsFromRows(r => canonicalLabel(r.label));
     const allSame =
       this.expansionRows.length === 0 ||
       this.expansionRows.every(r => r.label === this.expansionRows[0].label);
@@ -583,7 +586,7 @@ export class WizardGeneratorService {
   }
 
   private createDataFileColumn(state: WizardState, position: number): SdrfColumn {
-    const { value, modifiers } = this.modsFromRows(r => r.fileName);
+    const { value, modifiers } = this.modsFromRows(r => r.downloadUrl || r.fileName);
     return {
       name: 'comment[data file]',
       type: 'comment',
@@ -648,6 +651,30 @@ export class WizardGeneratorService {
     table.columns = columns.map((column, columnPosition) => ({ ...column, columnPosition }));
     table.metadata = { ...table.metadata, templateSnapshotId: state.templateSnapshotId,
       templateRefs: state.leafTemplateRefs };
+  }
+
+  /** Expand raw-file assignments to every SDRF channel row belonging to that file. */
+  private applyProtocolAssignments(table: SdrfTable, state: WizardState): void {
+    for (const [name, field] of Object.entries(state.protocolFields || {})) {
+      const definition = state.effectiveColumns?.find(c => c.name === name);
+      if (state.templateSnapshotId && !definition) continue;
+      const used = this.expansionRows.map(row => protocolChoiceForFile(field, row.fileName)?.value);
+      const hasValue = used.some(value => value !== undefined);
+      const existingIndex = table.columns.findIndex(column => column.name === name);
+      const insertionIndex = existingIndex < 0 ? table.columns.length : existingIndex;
+      table.columns = table.columns.filter(column => column.name !== name);
+      if (!hasValue && definition?.requirement !== 'required') continue;
+      const count = name === PROTOCOL_COLUMNS.modifications
+        ? Math.max(1, ...used.map(value => Array.isArray(value) ? value.length : 0)) : 1;
+      const columns: SdrfColumn[] = Array.from({ length: count }, (_, index) => ({
+        name, type: 'comment',
+        ...this.modsFromRows(row => protocolOutputValue(state, name, row.fileName, index)),
+        columnPosition: 0, isRequired: definition?.requirement === 'required',
+        ...(name === PROTOCOL_COLUMNS.instrument ? { ontologyType: 'ms' as const } : {}),
+      }));
+      table.columns.splice(insertionIndex, 0, ...columns);
+    }
+    table.columns.forEach((column, index) => { column.columnPosition = index; });
   }
 
   private createFactorColumn(
@@ -744,6 +771,7 @@ export class WizardGeneratorService {
       const sample = this.findSample(state, row.sampleIndex);
       const override = sample?.customCharacteristics?.[columnName]?.trim();
       const fromChoices = sample?.characteristicValues?.[columnName]?.trim();
+      if (sample?.characteristicValues?.[columnName] === '') return 'not available';
       return override || fromChoices || defaultValue;
     }, defaultValue);
 

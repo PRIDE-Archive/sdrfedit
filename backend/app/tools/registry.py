@@ -20,7 +20,7 @@ from ..config import get_settings
 from ..parsing.base import ParsedDocument, PdfParseError
 from ..parsing.factory import get_pdf_parser
 from ..session import get_session_store
-from . import celllines, literature, ontology, pride, spec_search, templates, supplements
+from . import celllines, literature, ontology, pride, pride_technical, spec_search, templates, supplements
 from .http import ToolHttpError, get_bytes, get_text
 from .publication_cache import cached_download, SupplementDownloadError
 
@@ -35,11 +35,13 @@ MAX_SUMMARY_CHARS = 240
 
 
 async def _get_metadata(args: dict, _session: str) -> Any:
-    return await pride.fetch_project(args["accession"])
+    accession = pride.normalize_accession(args["accession"])
+    return await get_session_store().fetch_pride_metadata(_session, accession, pride.fetch_project)
 
 
 async def _get_raw_files(args: dict, _session: str) -> Any:
-    return await pride.fetch_raw_files(args["accession"], int(args.get("limit", 400)))
+    accession = pride.normalize_accession(args["accession"])
+    return await get_session_store().fetch_pride_raw_files(_session, accession, pride.fetch_raw_files)
 
 
 async def _find_publication(args: dict, _session: str) -> Any:
@@ -292,7 +294,8 @@ async def _list_templates(args: dict, _session: str) -> Any:
 
 
 async def _get_template_columns(args: dict, _session: str) -> Any:
-    return await templates.get_template_columns(args["name"], args.get("version"))
+    return await templates.get_template_columns(args["name"], args.get("version"),
+                                                offset=args.get("offset", 0), limit=args.get("limit", 20))
 
 
 async def _validate_templates(args: dict, _session: str) -> Any:
@@ -549,7 +552,8 @@ def _summarize_template_columns(result: dict) -> str:
     columns = result.get("columns") or []
     return (
         f"{result.get('name')} ({result.get('layer') or 'unknown layer'}) · "
-        f"{len(required)} required of {len(columns)} columns"
+        f"{len(required)} required of {result.get('totalColumns', len(columns))} columns"
+        + (f" · showing {len(columns)}; next offset {result['nextOffset']}" if result.get("nextOffset") is not None else "")
     )
 
 
@@ -604,8 +608,9 @@ TOOLS: list[dict[str, Any]] = [
             "name": "get_pride_metadata",
             "description": (
                 "Fetch only PRIDE Archive project metadata and publication references for a "
-                "ProteomeXchange accession. Does not fetch raw files. Always the first step "
-                "when the user gives a PXD identifier."
+                "ProteomeXchange accession. Returns complete description, protocols and sample "
+                "attributes without truncation. Does not fetch raw files. Results are cached per session. "
+                "Call first for a PXD identifier only if its complete metadata is not already in context."
             ),
             "parameters": {
                 "type": "object",
@@ -614,6 +619,8 @@ TOOLS: list[dict[str, Any]] = [
             },
         },
         "handler": _get_metadata,
+        # Protocol tails and sample attributes are evidence, not expendable previews.
+        "max_result_chars": None,
         "status": "Fetching PRIDE metadata",
         "title": "PRIDE metadata",
         "summarize": _summarize_metadata,
@@ -621,20 +628,71 @@ TOOLS: list[dict[str, Any]] = [
     {
         "declaration": {
             "name": "get_pride_raw_files",
-            "description": "Fetch only the raw/acquisition file names for a ProteomeXchange accession.",
+            "description": "Fetch all raw/acquisition file names and available URLs for a ProteomeXchange accession without truncation. Results are cached per session; call only if the full list is absent from context. Does not download file contents.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "accession": {"type": "string"},
-                    "limit": {"type": "integer", "description": "Max file names to return (default 400)."},
                 },
                 "required": ["accession"],
             },
         },
         "handler": _get_raw_files,
+        "max_result_chars": None,
         "status": "Listing raw files",
         "title": "PRIDE raw files",
         "summarize": _summarize_raw_files,
+    },
+    {
+        "declaration": {
+            "name": "list_pride_technical_files",
+            "description": (
+                "Discover session-bound PRIDE evidence file IDs (mqpar.xml, mzTab, mzIdentML). "
+                "Call for missing or conflicting technical parameters on Instrument & Protocol, "
+                "an explicit user verification request, or an unresolved file-to-analysis mapping. "
+                "Skip when existing evidence already answers the question. Does not download files. "
+                "Prefer relevant mqpar/mzTab; mzIdentML is a slower fallback. Reuses session discovery."
+            ),
+            "parameters": {
+                "type": "object", "additionalProperties": False,
+                "properties": {
+                    "accession": {"type": "string", "description": "Exact current PXD accession."},
+                    "reason": {"type": "string", "enum": sorted(pride_technical.REASONS)},
+                    "offset": {"type": "integer", "minimum": 0, "maximum": 200, "description": "Use returned nextOffset for another catalogue page."},
+                },
+                "required": ["accession", "reason"],
+            },
+        },
+        "handler": pride_technical.discover,
+        "status": "Finding PRIDE technical evidence files", "title": "PRIDE technical files",
+        "summarize": lambda r: f"{r.get('accession')}: {r.get('status')} · {r.get('candidateCount', 0)} candidate files" + (" · cached" if r.get('cached') else ""),
+    },
+    {
+        "declaration": {
+            "name": "extract_pride_technical_metadata",
+            "description": (
+                "Read technical evidence from an exact fileId returned by list_pride_technical_files "
+                "for this session/project. No arbitrary URLs or local paths. Returns sourced, scoped facts "
+                "with warnings and pagination; follow nextOffset before concluding a modification list. "
+                "15 seconds / 8 MiB input / 32 MiB decoded per file; at most 3 distinct files per project/session. "
+                "Pages and repeated calls use the cached result, including partial/failed reads. "
+                "Partial/unavailable results are optional evidence, not a reason to stop the wizard. "
+                "Do not use these files to infer biological replicates or replace ontology verification."
+            ),
+            "parameters": {
+                "type": "object", "additionalProperties": False,
+                "properties": {
+                    "accession": {"type": "string"},
+                    "fileId": {"type": "string", "description": "Exact discovered tech_… ID; never a filename or URL."},
+                    "offset": {"type": "integer", "minimum": 0, "maximum": 2000, "description": "Fact offset; use returned nextOffset. Cached pages do not redownload."},
+                },
+                "required": ["accession", "fileId"],
+            },
+        },
+        "handler": pride_technical.extract,
+        "status": "Reading PRIDE technical metadata", "title": "Technical parameter evidence",
+        "summarize": lambda r: f"{r.get('fileName', r.get('accession', 'PRIDE'))}: {r.get('status')} · "
+                               f"{r.get('totalStoredFacts', 0)} facts · {r.get('stopReason') or 'see evidence'}" + (" · cached" if r.get('cached') else ""),
     },
     {
         "declaration": {
@@ -921,10 +979,14 @@ TOOLS: list[dict[str, Any]] = [
     {
         "declaration": {
             "name": "get_template_columns",
-            "description": "Resolve a template's inherited column list with requirement levels.",
+            "description": "Read a page of inherited template columns and validation rules. When nextOffset is non-null, call again with that offset and the same name/version. Omit version to use the pinned catalogue version.",
             "parameters": {
                 "type": "object",
-                "properties": {"name": {"type": "string"}, "version": {"type": "string"}},
+                "properties": {
+                    "name": {"type": "string"}, "version": {"type": "string"},
+                    "offset": {"type": "integer", "minimum": 0},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                },
                 "required": ["name"],
             },
         },
@@ -1025,8 +1087,9 @@ async def dispatch(name: str, raw_arguments: str | dict, session_id: str) -> str
     except Exception as error:  # noqa: BLE001 - a failing tool must not kill the turn
         result = {"error": f"{type(error).__name__}: {error}"}
 
-    payload = json.dumps(result, ensure_ascii=False, default=str)
-    if len(payload) > MAX_RESULT_CHARS:
+    payload = json.dumps(result, ensure_ascii=False, default=str, separators=(",", ":"))
+    max_result_chars = tool.get("max_result_chars", MAX_RESULT_CHARS)
+    if max_result_chars is not None and len(payload) > max_result_chars:
         payload = json.dumps({"ok": False, "error": "Tool result exceeds the output limit. Request fewer sections/items or a smaller maxChars.",
                               "truncated": True, "originalChars": len(payload)}, ensure_ascii=False)
     return payload

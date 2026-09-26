@@ -1,6 +1,7 @@
+import { validateSampleListEdit, previewRegexRename } from '../../../core/utils/sample-list-edit';
 import { resolveFactorValue } from '../../../core/models/wizard';
 /**
- * Sample Values Component (Step 3)
+ * Samples & Groups Component (Step 2)
  *
  * Single-candidate columns auto-fill; multi-candidate columns use dropdowns.
  * Top cards: sample naming + biological replicates.
@@ -19,6 +20,10 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+
+import { SampleCharacteristicsComponent } from './sample-characteristics.component';
+import { FactorValuesComponent } from './factor-values.component';
+import { sampleCompletionErrors } from '../../../core/models/wizard';
 
 import { WizardStateService } from '../../../core/services/wizard-state.service';
 import {
@@ -69,96 +74,121 @@ function parseBioRepNumbers(text: string): number[] {
 @Component({
   selector: 'wizard-sample-values',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, SampleCharacteristicsComponent, FactorValuesComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="step-container">
-      <div class="step-header">
-        <h3>Sample-Specific Values</h3>
-        <p class="step-description">
-          Set sample names and biological replicates, then assign multi-choice
-          characteristics and study factor values for each sample.
-        </p>
-      </div>
-
-      <section class="setup-panel">
-        <div class="setup-row">
-          <div class="setup-row-head">
-            <h5>Sample names</h5>
-            <span class="setup-hint">Separate with spaces, commas, or new lines</span>
+      <section class="question-region" aria-labelledby="sample-names-question">
+        <header class="question-header">
+          <span class="question-number" aria-hidden="true">1</span>
+          <div class="question-heading">
+            <h3 id="sample-names-question">What are your sample names and biological replicates?</h3>
+            <p class="step-description">Review sample names and biological replicate numbers below. Use Batch rename and Set replicates to update selected samples; sample count is set in Experiment Setup.</p>
           </div>
-          <div class="quick-chips">
-            <button type="button" class="chip-btn" (click)="applyNamePreset('sample_{n}')">sample_1, sample_2…</button>
-            <button type="button" class="chip-btn" (click)="applyNamePreset('Sample{n}')">Sample1, Sample2…</button>
-            <div class="pattern-inline">
-              <input
-                type="text"
-                class="field-input pattern-mini"
-                [ngModel]="namePattern()"
-                (ngModelChange)="namePattern.set($event)"
-                [placeholder]="'custom_' + '{' + 'n' + '}'"
-                title="Use {n} for the sample number"
-              />
-              <button type="button" class="chip-btn" (click)="applyNamePreset(namePattern())">Apply pattern</button>
+          <span class="question-badge">Required</span>
+        </header>
+        <div class="question-body">
+          <div class="naming-toolbar">
+            <div><strong>{{ wizardState.samples().length }} samples</strong><p class="naming-muted">{{ namingSelection().size ? namingSelection().size + ' selected' : 'All samples' }}</p></div>
+            <div class="naming-actions">
+              @if (canUndoRename()) { <button type="button" class="naming-button" (click)="undoRename()">Undo rename</button> }
+              <button type="button" class="naming-button" [attr.aria-expanded]="namingEditor() === 'names'" (click)="openNamingEditor('names')">Batch rename</button>
+              <button type="button" class="naming-button" [attr.aria-expanded]="namingEditor() === 'replicates'" (click)="openNamingEditor('replicates')">Set replicates</button>
             </div>
           </div>
-          <div class="setup-row-body">
-            <textarea
-              class="setup-textarea"
-              rows="1"
-              [ngModel]="customNamesText()"
-              (ngModelChange)="customNamesText.set($event)"
-              placeholder="sample_1 sample_2 sample_3  or  control, treated, control_rep2"
-            ></textarea>
-            <button
-              type="button"
-              class="card-btn primary compact"
-              (click)="applyCustomNames()"
-              [disabled]="parsedNames().length === 0"
-            >
-              Apply names
-              @if (parsedNames().length > 0) {
-                <span class="btn-meta">({{ parsedNames().length }})</span>
+          @if (namingEditor()) {
+            <section class="naming-panel" aria-label="Batch edit samples">
+              <div class="naming-toolbar"><strong>{{ namingEditor() === 'names' ? 'Batch rename' : 'Set biological replicates' }}</strong><button type="button" class="naming-button" aria-label="Close batch editor" (click)="namingEditor.set(null)">×</button></div>
+              <div class="naming-actions naming-modes">
+                <button type="button" class="naming-button" [attr.aria-pressed]="namingMode() === 'generate'" (click)="namingMode.set('generate')">{{ namingEditor() === 'names' ? 'Find & replace' : 'Use a rule' }}</button>
+                <button type="button" class="naming-button" [attr.aria-pressed]="namingMode() === 'paste'" (click)="namingMode.set('paste')">Paste a list</button>
+              </div>
+              @if (namingMode() === 'paste') {
+                <label class="naming-label">Values in sample order<textarea class="naming-input" rows="4" [ngModel]="namingPaste()" (ngModelChange)="namingPaste.set($event)" placeholder="One value per line, or separate with commas"></textarea></label>
+              } @else if (namingEditor() === 'names') {
+                <div class="regex-fields">
+                  <label class="naming-label">Find · regular expression<input class="naming-input" [ngModel]="renamePattern()" (ngModelChange)="renamePattern.set($event)" spellcheck="false" /></label>
+                  <label class="naming-label">Replace with<input class="naming-input" [ngModel]="renameReplacement()" (ngModelChange)="renameReplacement.set($event)" spellcheck="false" /></label>
+                </div>
+                <label class="naming-label"><input type="checkbox" [ngModel]="renameIgnoreCase()" (ngModelChange)="renameIgnoreCase.set($event)" /> Ignore case</label>
+                <p class="naming-muted">$1, $2… reuse captured groups. Unmatched names stay unchanged.</p>
+                <details><summary>Examples</summary><div class="naming-actions"><button type="button" class="naming-button" (click)="renamePattern.set('^sample_'); renameReplacement.set('patient_')">Replace prefix</button><button type="button" class="naming-button" (click)="renamePattern.set('$'); renameReplacement.set('_baseline')">Append suffix</button></div></details>
+              } @else {
+                <label class="naming-label">Numbering rule<select class="naming-input" [ngModel]="namingRule()" (ngModelChange)="namingRule.set($event)"><option value="sequential">Sequential: 1, 2, 3, 4…</option><option value="paired">Repeat each number twice: 1, 1, 2, 2…</option><option value="same">Same number for all selected samples</option></select></label>
+                @if (namingRule() === 'same') { <label class="naming-label">Replicate number<input class="naming-input" type="number" min="1" [ngModel]="namingReplicate()" (ngModelChange)="namingReplicate.set(+$event)" /></label> }
               }
-            </button>
+              @if (namingEditor() === 'names') {
+                <table class="sample-table rename-preview" aria-label="Rename preview"><thead><tr><th>Current name</th><th>New name</th></tr></thead><tbody>@for (index of namingTargets().slice(0, 4); track index; let i = $index) { <tr><td>{{ state().samples[index].sourceName }}</td><td>{{ namingValues()[i] || '—' }}</td></tr> }</tbody></table>
+                <p class="naming-muted" aria-live="polite">{{ renameChangedCount() }} names will change · previewing first {{ namingTargets().slice(0, 4).length }}</p>
+              } @else {
+                <div class="naming-preview">Preview: {{ namingValues().slice(0, 6).join(', ') }}{{ namingValues().length > 6 ? '…' : '' }}</div>
+              }
+              @if (namingError()) { <p class="naming-error" role="alert">{{ namingError() }}</p> }
+              <div class="naming-toolbar naming-panel-footer"><p class="naming-muted">{{ namingSelection().size ? 'Only selected rows will change.' : 'All sample rows will change.' }}</p><div class="naming-actions"><button type="button" class="naming-button" (click)="namingEditor.set(null)">Cancel</button><button type="button" class="naming-button naming-primary" [disabled]="!!namingError()" (click)="applyNamingChanges()">Apply to {{ namingTargets().length }} samples</button></div></div>
+            </section>
+          }
+          <div class="table-container naming-table-container">
+            <table class="sample-table naming-table" aria-label="Sample names and biological replicates">
+              <thead><tr><th class="naming-check"><input type="checkbox" aria-label="Select all samples for batch editing" [checked]="namingSelection().size === wizardState.samples().length" [indeterminate]="namingSelection().size > 0 && namingSelection().size < wizardState.samples().length" (change)="selectNamingSamples($any($event.target).checked)" /></th><th class="naming-index">#</th><th>Sample name</th><th class="naming-replicate">Bio. replicate</th></tr></thead>
+              <tbody>@for (sample of namingRows(); track sample.index; let row = $index) {
+                <tr [class.row-selected]="namingSelection().has(namingCurrentPage() * 6 + row)">
+                  <td><input type="checkbox" [attr.aria-label]="'Select ' + sample.sourceName" [checked]="namingSelection().has(namingCurrentPage() * 6 + row)" (change)="toggleNamingSample(namingCurrentPage() * 6 + row)" /></td><td>{{ namingCurrentPage() * 6 + row + 1 }}</td>
+                  <td>{{ sample.sourceName }}</td>
+                  <td>{{ sample.biologicalReplicate }}</td>
+                </tr>
+              }</tbody>
+            </table>
           </div>
-        </div>
+          <div class="naming-toolbar naming-pagination"><div class="naming-actions"><span class="naming-muted">{{ namingCurrentPage() * 6 + 1 }}–{{ namingCurrentPage() * 6 + namingRows().length }} of {{ wizardState.samples().length }}</span><button type="button" class="naming-button" aria-label="Previous samples" [disabled]="namingCurrentPage() === 0" (click)="namingPage.set(namingCurrentPage() - 1)">←</button><button type="button" class="naming-button" aria-label="Next samples" [disabled]="(namingCurrentPage() + 1) * 6 >= wizardState.samples().length" (click)="namingPage.set(namingCurrentPage() + 1)">→</button></div></div>
+          <p class="naming-muted" role="status">{{ namingStatus() }}</p>
 
-        <div class="setup-row">
-          <div class="setup-row-head">
-            <h5>Biological replicates</h5>
-            <span class="setup-hint">Numbers only — spaces / commas / new lines</span>
+        </div>
+      </section>
+
+      <section class="question-region" aria-labelledby="sample-attributes-question">
+        <header class="question-header">
+          <span class="question-number" aria-hidden="true">2</span>
+          <div class="question-heading">
+            <h3 id="sample-attributes-question">What describes your samples?</h3>
+            <p class="step-description">Add the values present in your study, then select samples and assign their values. Use All to assign one value to every sample.</p>
           </div>
-          <div class="quick-chips">
-            <button type="button" class="chip-btn" (click)="applyBioRepPreset('sequential')">1, 2, 3…</button>
-            <button type="button" class="chip-btn" (click)="applyBioRepPreset('paired')">1, 1, 2, 2…</button>
-            <button type="button" class="chip-btn" (click)="applyBioRepPreset('allOnes')">1, 1, 1, 1…</button>
-            <button type="button" class="chip-btn ghost" (click)="copyFirstToAll('biologicalReplicate')">Copy first → all</button>
-          </div>
-          <div class="setup-row-body">
-            <textarea
-              class="setup-textarea"
-              rows="1"
-              [ngModel]="customBioRepText()"
-              (ngModelChange)="customBioRepText.set($event)"
-              placeholder="1 1 2 2 3 3  or  1,2,1,2"
-            ></textarea>
-            <button
-              type="button"
-              class="card-btn primary compact"
-              (click)="applyCustomBioReps()"
-              [disabled]="parsedBioReps().length === 0"
-            >
-              Apply numbers
-              @if (parsedBioReps().length > 0) {
-                <span class="btn-meta">({{ parsedBioReps().length }})</span>
-              }
-            </button>
+          <span class="question-badge">Required</span>
+        </header>
+        <div class="question-body">
+          <div #attributesEditor tabindex="-1" class="attributes-editor">
+            <p class="section-status">{{ attributeSummary() }}</p>
+            <wizard-sample-characteristics [aiEnabled]="aiEnabled" [embedded]="true" />
           </div>
         </div>
       </section>
 
+      <section class="question-region" aria-labelledby="sample-groups-question">
+        <header class="question-header">
+          <span class="question-number" aria-hidden="true">3</span>
+          <div class="question-heading">
+            <h3 id="sample-groups-question">Which attributes are your study factors?</h3>
+            <p class="step-description">Select the variables you study. Reuse sample attributes or add a custom factor.</p>
+          </div>
+          <span class="question-badge">Required</span>
+        </header>
+        <div class="question-body">
+          <wizard-factor-values [embedded]="true" />
+        </div>
+      </section>
+
+      <section class="question-region" aria-labelledby="sample-table-question">
+        <header class="question-header">
+          <span class="question-number" aria-hidden="true">4</span>
+          <div class="question-heading">
+            <h3 id="sample-table-question">Review sample metadata</h3>
+            <p class="step-description">Review sample names, biological replicates, attributes, and factor values. Complete any missing metadata before continuing.</p>
+          </div>
+          <span class="question-badge">Required</span>
+        </header>
+        <div class="question-body">
       @if (batchColumns().length > 0) {
+        <details class="sample-editor">
+          <summary>Batch fill sample values <span>Assign one value to several samples</span></summary>
         <section class="batch-panel">
           <div class="batch-title-row">
             <h4>Match values to samples</h4>
@@ -272,6 +302,7 @@ function parseBioRepNumbers(text: string): number[] {
             </div>
           </div>
         </section>
+        </details>
       }
 
       <div class="table-bar">
@@ -288,6 +319,7 @@ function parseBioRepNumbers(text: string): number[] {
         <button type="button" class="add-btn" (click)="addSample()">+ Add sample</button>
       </div>
 
+      <p class="step-description table-help">Names and replicates come from the sample list above. Assign attributes and groups below.</p>
       <div class="table-container">
         <table class="sample-table">
           <thead>
@@ -306,9 +338,6 @@ function parseBioRepNumbers(text: string): number[] {
               @for (col of displayColumns(); track col.name) {
                 <th class="col-override" [title]="col.name">
                   {{ columnHeader(col) }}
-                  @if (choiceCount(col.name) > 1) {
-                    <span class="multi-tag">{{ choiceCount(col.name) }}</span>
-                  }
                 </th>
               }
               @for (factor of enabledFactors(); track factor.name) {
@@ -332,23 +361,9 @@ function parseBioRepNumbers(text: string): number[] {
                 </td>
                 <td class="col-index">{{ sample.index }}</td>
                 <td class="col-name">
-                  <input
-                    type="text"
-                    class="cell-input"
-                    [ngModel]="sample.sourceName"
-                    (ngModelChange)="updateSample(i, 'sourceName', $event)"
-                    placeholder="Enter name..."
-                  />
+                  <span>{{ sample.sourceName }}</span>
                 </td>
-                <td class="col-biorep">
-                  <input
-                    type="number"
-                    class="cell-input"
-                    [ngModel]="sample.biologicalReplicate"
-                    (ngModelChange)="updateSample(i, 'biologicalReplicate', +$event)"
-                    min="1"
-                  />
-                </td>
+                <td class="col-biorep"><span>{{ sample.biologicalReplicate }}</span></td>
                 @for (col of displayColumns(); track col.name) {
                   <td class="col-override">
                     @if (choiceCount(col.name) <= 1) {
@@ -402,20 +417,72 @@ function parseBioRepNumbers(text: string): number[] {
         </table>
       </div>
 
-      @if (!wizardState.isStep3Valid()) {
-        <div class="validation-message">
-          <span class="warning-icon">!</span>
-          All samples need a source name; multi-candidate required columns and
-          study factor values must be set for every sample.
+      <div class="completion-status" role="status" aria-live="polite">
+        <strong>{{ completedSamples() }} / {{ wizardState.samples().length }} samples complete</strong>
+        @if (completionErrors().length) {
+          <ul>@for (error of completionErrors().slice(0, 4); track $index) { <li>{{ error }}</li> }</ul>
+          @if (completionErrors().length > 4) { <p>And {{ completionErrors().length - 4 }} more items to complete.</p> }
+        } @else { <p>Ready to link your samples to raw files.</p> }
+      </div>
+
         </div>
-      }
+      </section>
+
     </div>
   `,
+  styleUrls: ['./question-regions.css'],
   styles: [`
-    .step-container { max-width: 1100px; }
+    :host { display: block; width: 100%; min-width: 0; }
+    .step-container { width: 100%; min-width: 0; }
+    .naming-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+    .naming-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .naming-muted { margin: 0; font-size: 12px; color: #64748b; }
+    .naming-button { padding: 8px 12px; border: 1px solid #dce4ef; border-radius: 7px; background: #fff; color: #334155; font: inherit; font-size: 12px; cursor: pointer; }
+    .naming-button[aria-pressed="true"], .naming-button[aria-expanded="true"] { color: #2563eb; border-color: #2563eb; background: #eff6ff; }
+    .naming-button.naming-primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+    .naming-button:disabled { opacity: .45; cursor: not-allowed; }
+    .naming-panel { background: #f4f7fb; border: 1px solid #dce4ef; border-radius: 10px; padding: 18px; margin-bottom: 16px; }
+    .naming-modes { margin-bottom: 16px; }
+    .regex-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+    .rename-preview { table-layout: fixed; margin: 14px 0; }
+    .rename-preview td { white-space: normal; overflow-wrap: anywhere; }
+    @media (max-width: 600px) { .regex-fields { grid-template-columns: 1fr; } }
+    .naming-fields { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 12px; }
+    .naming-label { display: block; font-size: 12px; color: #64748b; }
+    .naming-input { box-sizing: border-box; width: 100%; min-width: 0; border: 1px solid #dce4ef; border-radius: 6px; background: #fff; color: #243247; padding: 8px; margin-top: 5px; font: inherit; font-size: 14px; }
+    textarea.naming-input { resize: vertical; }
+    .naming-preview { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; padding: 12px 0; color: #64748b; font-size: 12px; }
+    .naming-preview-value { padding: 3px 7px; background: #fff; border-radius: 5px; color: #334155; overflow-wrap: anywhere; max-width: 100%; }
+    .naming-error { color: #b42318; font-size: 12px; margin: 0 0 12px; }
+    .naming-panel-footer { margin-bottom: 0; }
+    .naming-delete { color: #b42318; }
+    .naming-delete-column { width: 44px; }
+    .naming-remove { width: 28px; height: 28px; border: 0; border-radius: 6px; background: transparent; color: #64748b; font-size: 20px; cursor: pointer; }
+    .naming-remove:hover:not(:disabled) { background: #fef2f2; color: #b42318; }
+    .naming-remove:disabled { opacity: .35; cursor: not-allowed; }
+    .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    .naming-pagination { margin-top: 16px; justify-content: flex-end; }
+    .naming-table { table-layout: fixed; }
+    .naming-table th, .naming-table td { white-space: normal; }
+    .naming-check { width: 32px; } .naming-index { width: 36px; } .naming-replicate { width: 125px; }
+    .naming-table .cell-input { border-color: transparent; background: transparent; }
+    .naming-table .cell-input:hover, .naming-table .cell-input:focus { border-color: #cbd5e1; background: #fff; }
+    @media (max-width: 600px) { .naming-fields { grid-template-columns: 1fr 1fr; } .naming-fields > :first-child { grid-column: 1 / -1; } .naming-replicate { width: 96px; } .naming-input { font-size: 16px; } }
+    .section-status { margin: 0 0 14px; color: #64748b; font-size: 12px; }
+    .attributes-editor:focus-visible { outline: 2px solid #2563eb; outline-offset: 4px; }
+    .sample-editor { border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px; margin-bottom: 16px; background: #f8fafc; }
+    .sample-editor summary { cursor: pointer; color: #334155; font-weight: 600; font-size: 13px; }
+    .sample-editor summary span { display: block; margin-top: 4px; color: #64748b; font-size: 12px; font-weight: 400; }
+    .sample-editor[open] summary { margin-bottom: 16px; }
+    .table-help { margin-bottom: 10px !important; }
+    .column-edit { display: block; border: 0; background: none; color: #2563eb; cursor: pointer; padding: 4px 0; font-size: 11px; }
+    .completion-status { background: #f8fafc; border-radius: 8px; padding: 12px 16px; color: #334155; font-size: 13px; margin-top: 16px; }
+    .completion-status p { margin: 6px 0 0; }
+    .completion-status ul { padding-left: 20px; margin-bottom: 0; }
+
     .step-header { margin-bottom: 16px; }
     .step-header h3 { margin: 0 0 6px; font-size: 18px; font-weight: 600; color: #111827; }
-    .step-description { margin: 0; font-size: 14px; color: #6b7280; }
+    .step-description { margin: 0; color: #64748b; font-size: 13px; line-height: 1.7; }
 
     .setup-panel {
       margin-bottom: 12px;
@@ -892,9 +959,79 @@ export class SampleValuesComponent implements OnInit {
 
   readonly wizardState = inject(WizardStateService);
   readonly state = this.wizardState.state;
+  readonly namingEditor = signal<'names' | 'replicates' | null>(null);
+  readonly namingMode = signal<'generate' | 'paste'>('generate');
+  readonly namingSelection = signal<Set<number>>(new Set());
+  readonly namingPage = signal(0);
+  readonly renameUndo = signal<{ names: string[]; after: string } | null>(null);
+  readonly canUndoRename = computed(() => !!this.renameUndo() && this.renameUndo()!.after === JSON.stringify(this.state().samples.map(sample => [sample.index, sample.sourceName])));
+  undoRename(): void {
+    if (!this.canUndoRename()) return;
+    this.renameUndo()!.names.forEach((sourceName, index) => this.wizardState.updateSample(index, { sourceName }));
+    this.renameUndo.set(null); this.namingStatus.set('Rename undone.');
+  }
+  readonly renamePattern = signal('^sample_(\\d+)$');
+  readonly renameReplacement = signal('patient_$1');
+  readonly renameIgnoreCase = signal(false);
+  readonly renamePreview = computed(() => {
+    try { return { values: previewRegexRename(this.namingTargets().map(i => this.state().samples[i].sourceName), this.renamePattern(), this.renameReplacement(), this.renameIgnoreCase()), error: '' }; }
+    catch (error) { return { values: [] as string[], error: error instanceof Error ? error.message : 'Invalid regular expression.' }; }
+  });
+  readonly renameChangedCount = computed(() => this.namingTargets().filter((index, i) => this.namingValues()[i] !== undefined && this.state().samples[index].sourceName !== this.namingValues()[i]).length);
+  readonly namingPrefix = signal('sample_');
+  readonly namingStart = signal(1);
+  readonly namingDigits = signal(1);
+  readonly namingPaste = signal('');
+  readonly namingRule = signal('sequential');
+  readonly namingReplicate = signal(1);
+  readonly namingStatus = signal('Select rows to limit batch changes · Sample count is set in Experiment Setup');
+  readonly namingCurrentPage = computed(() => Math.min(this.namingPage(), Math.max(0, Math.ceil(this.state().samples.length / 6) - 1)));
+  readonly namingRows = computed(() => this.state().samples.slice(this.namingCurrentPage() * 6, this.namingCurrentPage() * 6 + 6));
+  readonly namingTargets = computed(() => this.state().samples.map((_, i) => i).filter(i => !this.namingSelection().size || this.namingSelection().has(i)));
+  readonly namingValues = computed((): (string | number)[] => {
+    if (this.namingMode() === 'paste') return parseDelimitedTokens(this.namingPaste()).map(value => this.namingEditor() === 'names' ? value : Number(value));
+    if (this.namingEditor() === 'names') return this.renamePreview().values;
+    return this.namingTargets().map((_, i) => this.namingRule() === 'paired' ? Math.floor(i / 2) + 1 : this.namingRule() === 'same' ? this.namingReplicate() : i + 1);
+  });
+  readonly namingError = computed(() => {
+    if (this.namingEditor() === 'names' && this.namingMode() === 'generate' && this.renamePreview().error) return this.renamePreview().error;
+    if (this.namingEditor() === 'names' && !this.renameChangedCount()) return 'No names will change. Adjust the rule or select different samples.';
+    return validateSampleListEdit(this.state().samples, this.namingTargets(), this.namingValues(), this.namingEditor() === 'names' ? 'sourceName' : 'biologicalReplicate');
+  });
+
+  openNamingEditor(editor: 'names' | 'replicates'): void {
+    this.namingEditor.set(this.namingEditor() === editor ? null : editor);
+    this.namingMode.set('generate');
+    this.namingPaste.set('');
+  }
+  selectNamingSamples(all: boolean): void { this.namingSelection.set(new Set(all ? this.state().samples.map((_, i) => i) : [])); }
+  toggleNamingSample(index: number): void {
+    this.namingSelection.update(selection => { const next = new Set(selection); next.has(index) ? next.delete(index) : next.add(index); return next; });
+  }
+  applyNamingChanges(): void {
+    if (!this.namingEditor() || this.namingError()) return;
+    const targets = this.namingTargets(), values = this.namingValues();
+    const field = this.namingEditor() === 'names' ? 'sourceName' : 'biologicalReplicate';
+    const oldNames = this.state().samples.map(sample => sample.sourceName);
+    targets.forEach((index, i) => this.wizardState.updateSample(index, { [field]: values[i] }));
+    if (field === 'sourceName') this.renameUndo.set({ names: oldNames, after: JSON.stringify(this.state().samples.map(sample => [sample.index, sample.sourceName])) });
+    this.namingStatus.set(`Updated ${targets.length} samples.`);
+    this.namingEditor.set(null);
+  }
+
+
   readonly namePattern = signal('sample_{n}');
   readonly customNamesText = signal('');
   readonly customBioRepText = signal('');
+  readonly completionErrors = computed(() => sampleCompletionErrors(this.state()));
+  readonly completedSamples = computed(() => this.state().samples.filter(sample =>
+    sampleCompletionErrors({ ...this.state(), samples: [sample] }, false).length === 0).length);
+  readonly attributeSummary = computed(() => {
+    const columns = this.state().characteristicColumns.filter(c => c.requirement === 'required'
+      && c.name !== 'characteristics[biological replicate]' && c.name !== 'characteristics[material type]');
+    const filled = columns.filter(c => this.choiceCount(c.name) > 0).length;
+    return `${filled} / ${columns.length} required attributes filled`;
+  });
   readonly batchColumn = signal('');
   readonly batchValue = signal('');
   readonly groupSize = signal(2);
@@ -917,6 +1054,7 @@ export class SampleValuesComponent implements OnInit {
       }
     }
     return columns.filter(c =>
+      (c.requirement === 'required' && c.name !== 'characteristics[biological replicate]' && c.name !== 'characteristics[material type]') ||
       shouldShowOnSampleValuesStep(c.name, (choices[c.name] || []).length) ||
       this.state().factors.some(f => f.enabled && f.sourceCharacteristic === c.name && (choices[c.name] || []).length > 1)
     );
@@ -955,9 +1093,6 @@ export class SampleValuesComponent implements OnInit {
   ngOnInit(): void {
     this.wizardState.ensureSamplesInitialized();
     this.wizardState.ensureDefaultFactors();
-    if (!(this.state().characteristicColumns || []).length) {
-      void this.wizardState.refreshCharacteristicColumns();
-    }
     this.wizardState.syncCharacteristicAssignments();
     this.wizardState.syncFactorAssignments();
     const multi = this.batchColumns();
@@ -1071,8 +1206,16 @@ export class SampleValuesComponent implements OnInit {
     this.wizardState.syncCharacteristicAssignments();
   }
 
+
+
   removeSample(index: number): void {
+    if (this.state().samples.length <= 1 || index < 0 || index >= this.state().samples.length) return;
+    const name = this.state().samples[index].sourceName;
     this.wizardState.removeSample(index);
+    this.namingEditor.set(null);
+    this.namingPage.set(this.namingCurrentPage());
+    this.namingStatus.set(`Deleted ${name}.`);
+    this.namingSelection.update(selection => new Set([...selection].filter(i => i !== index).map(i => i > index ? i - 1 : i)));
     this.selectedIndices.update(set => {
       const next = new Set<number>();
       for (const i of set) {

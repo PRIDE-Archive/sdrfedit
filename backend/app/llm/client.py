@@ -30,10 +30,11 @@ class ToolCall:
 
 @dataclass
 class StreamEvent:
-    type: str  # token | reasoning | tool_calls | done
+    type: str  # token | reasoning | tool_calls | usage | done
     text: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
     finish_reason: str | None = None
+    usage: dict[str, Any] | None = None
 
 
 class LlmClient:
@@ -75,6 +76,10 @@ class LlmClient:
             "stream": True,
             "temperature": self._settings.llm_temperature if temperature is None else temperature,
         }
+        if self._settings.llm_reasoning_effort:
+            body["reasoning_effort"] = self._settings.llm_reasoning_effort
+        if self._settings.llm_stream_include_usage:
+            body["stream_options"] = {"include_usage": True}
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"
@@ -107,6 +112,9 @@ class LlmClient:
                     if error:
                         detail = error.get("message") if isinstance(error, dict) else str(error)
                         raise LlmError(f"LLM stream error: {(detail or '')[:400]}")
+
+                    if isinstance(chunk.get("usage"), dict):
+                        yield StreamEvent(type="usage", usage=chunk["usage"])
 
                     choices = chunk.get("choices") or []
                     if not choices:

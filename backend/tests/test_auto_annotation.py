@@ -194,3 +194,44 @@ async def test_automatic_report_does_not_bypass_step_gate(monkeypatch):
     assert result['actions'] == []
     assert result['automation']['status'] == 'blocked'
     assert result['automation']['issues']
+
+
+async def test_replicate_repair_rejected_then_corrected_in_same_turn(monkeypatch):
+    count = 0
+
+    class Client:
+        def __init__(self, settings):
+            pass
+
+        async def stream(self, messages, tools):
+            nonlocal count
+            count += 1
+            if count == 1:
+                args = [[1] * 7]  # Valid shape, but wrong count for this snapshot.
+            elif count == 2:
+                feedback = json.loads(messages[-1]['content'])
+                assert feedback['accepted'] == 0
+                assert '8 positive integer replicate values' in feedback['rejected'][0]
+                assert 'not sample indices' in feedback['rejected'][0]
+                assert '[[1,1,1,1,1,1,1,1]]' in feedback['rejected'][0]
+                args = [[1] * 8]
+            else:
+                yield StreamEvent(type='token', text='Correction proposed for review.')
+                return
+            yield StreamEvent(type='tool_calls', tool_calls=[ToolCall(
+                f'proposal-{count}', 'propose_wizard_actions', json.dumps({'actions': [
+                    {'op': 'setBiologicalReplicates', 'argsJson': json.dumps(args)}
+                ]})
+            )])
+
+    monkeypatch.setattr(agent, 'LlmClient', Client)
+    monkeypatch.setattr(agent, 'get_session_store', lambda: SessionStore())
+    events = [event async for event in agent.run_agent(ChatRequest(
+        sessionId='replicate-repair', focusStep='samples',
+        messages=[{'role': 'user', 'content': 'Set all biological replicates to 1.'}],
+        wizardState=WizardSnapshot(sampleCount=8, biologicalReplicates=[1,1,1,1,2,2,2,2]),
+    ))]
+    proposals = [event for event in events if event['type'] == 'actions']
+    assert len(proposals) == 1
+    assert events[-1]['result']['actions'][0]['args'] == [[1] * 8]
+    assert count == 3

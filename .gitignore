@@ -1,5 +1,8 @@
 # Angular
 .angular/
+
+# Local annotation reports and benchmark outputs
+/reports/
 # dist/ - NOT ignored, committed for jsDelivr CDN
 
 # Local scripts (user-specific paths)

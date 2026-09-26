@@ -1,3 +1,4 @@
+import { protocolCompletionErrors } from '../../utils/protocol-fields';
 import { Injectable, computed, inject, signal } from '@angular/core';
 import type { WizardActionCard } from '../../models/assistant';
 import {
@@ -5,17 +6,21 @@ import {
   getSpecialtyCharacteristicKey, isWizardSkippedCharacteristic,
   resolveFactorValue, factorCandidates, resolveRunFactorValue,
 } from '../../models/wizard';
-import { autoAnnotationStartStep, runAutoAnnotation, waitForAutoTask, type AutoTurn, type AutoValidation } from '../../utils/auto-annotation';
+import { autoAnnotationStartStep, runAutoAnnotation, waitForAutoTask, type AutoTurn, type AutoValidation,
+  type AutoRepairRequest, type AutoRepairEvent, type AutoBatchFailure } from '../../utils/auto-annotation';
 import { WizardStateService } from '../wizard-state.service';
 import { WizardGeneratorService } from '../wizard-generator.service';
 import { SdrfExportService } from '../sdrf-export.service';
 import { TemplateService } from '../template.service';
 import { WizardAiBridgeService } from './wizard-ai-bridge.service';
+import { describeActionFailure } from './wizard-action-repair';
 
 interface Checkpoint { state: WizardState; step: number }
 export interface AutoAnnotationCallbacks {
   request(step: number, runId: string): Promise<AutoTurn>;
-  record(cards: WizardActionCard[], applied: boolean, error?: string): void;
+  repair(request: AutoRepairRequest, runId: string): Promise<AutoTurn>;
+  repairEvent(event: AutoRepairEvent): void;
+  record(cards: WizardActionCard[], applied: boolean, error?: string, failure?: AutoBatchFailure): void;
   abort(): void;
 }
 
@@ -92,6 +97,9 @@ export class WizardAutoAnnotationService {
         }
       },
       request: step => callbacks.request(step, runId),
+      repair: request => callbacks.repair(request, runId),
+      describeFailure: describeActionFailure,
+      repairEvent: callbacks.repairEvent,
       apply: card => {
         this.result.set(null);
         if (card.action.step !== WIZARD_STEPS[this.wizard.currentStep()].id) {
@@ -189,7 +197,7 @@ export class WizardAutoAnnotationService {
       errors.push(...factorDefinitionErrors(state));
       if (!this.wizard.isFactorsDefined()) errors.push('Define study factors and candidates, or explicitly explain why the study has no factors.');
     }
-    if (step === 2) {
+    if (step === 1) {
       if (!state.samples.length) errors.push('No biological samples are defined.');
       for (const sample of state.samples) {
         if (!sample.sourceName.trim()) errors.push(`Sample ${sample.index}: missing source name.`);
@@ -207,7 +215,7 @@ export class WizardAutoAnnotationService {
       }
       if (!this.wizard.isStep3Valid() && !errors.length) errors.push('Correct sample characteristic and factor assignments to match their candidate values.');
     }
-    if (step === 3 && !this.wizard.isRunsFilesValid()) {
+    if (step === 2 && !this.wizard.isRunsFilesValid()) {
       if (!state.dataFiles.length) errors.push('Import the actual raw file names.');
       for (const file of state.dataFiles) {
         if (!file.runId || !state.msRuns.some(r => r.id === file.runId)) errors.push(`${file.fileName}: assign to an existing MS run.`);
@@ -219,18 +227,19 @@ export class WizardAutoAnnotationService {
       }
       errors.push('Check unique file names, valid fraction/technical replicate numbers, label kits and evidence-supported run/channel/sample mappings.');
     }
-    if (step === 4 && !this.wizard.isStep5Valid()) {
-      errors.push('Complete required fields from the resolved template columns and correct invalid protocol values.');
+    if (step === 3 && !this.wizard.isStep5Valid()) {
+      const protocolErrors = protocolCompletionErrors(state);
+      errors.push(...(protocolErrors.length ? protocolErrors : ['Correct invalid protocol mass tolerances.']));
     }
     return errors;
   }
 
   private async validate(signal: AbortSignal): Promise<AutoValidation> {
     // An explicit restart after a validation failure should revalidate, not replay protocol cards.
-    this.resumePoint = { step: 5 };
+    this.resumePoint = { step: WIZARD_STEPS.length - 1 };
     // Regeneration can fail; never retain an earlier, now stale artifact.
     this.result.set(null);
-    for (let step = 0; step < 5; step++) {
+    for (let step = 0; step < WIZARD_STEPS.length - 1; step++) {
       const issues = this.stepErrors(step);
       if (issues.length) return { issues };
     }
